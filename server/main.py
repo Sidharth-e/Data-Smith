@@ -1,0 +1,183 @@
+"""
+FastAPI server for Data Smith - Dataset Generation Tool.
+"""
+
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from typing import Literal
+import uvicorn
+
+from agent import DatasetAgent
+from formats import GenerateResponse
+
+
+# Initialize FastAPI app
+app = FastAPI(
+    title="Data Smith API",
+    description="Generate fine-tuning datasets from text files using LangChain and Ollama",
+    version="1.0.0"
+)
+
+# Configure CORS for frontend access
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Initialize the dataset agent
+# You can change the model name here to match your Ollama installation
+agent = DatasetAgent(model_name="mistral:7b-instruct")
+
+
+@app.get("/")
+async def root():
+    """Root endpoint with API info."""
+    return {
+        "name": "Data Smith API",
+        "version": "1.0.0",
+        "endpoints": {
+            "/api/health": "Health check",
+            "/api/generate": "Generate dataset from text file"
+        }
+    }
+
+
+@app.get("/api/health")
+async def health_check():
+    """Health check endpoint."""
+    return {"status": "healthy", "model": "llama3.2"}
+
+
+@app.post("/api/generate", response_model=GenerateResponse)
+async def generate_dataset(
+    file: UploadFile = File(...),
+    format_type: Literal["alpaca", "chat", "completion"] = Form(...),
+    num_samples: int = Form(default=5)
+):
+    """
+    Generate a dataset from an uploaded text file.
+    
+    Args:
+        file: Text file to process (.txt)
+        format_type: Output format - 'alpaca', 'chat', or 'completion'
+        num_samples: Number of samples to generate (default: 5)
+        
+    Returns:
+        Generated dataset in the specified format
+    """
+    # Validate file type
+    if not file.filename.endswith('.txt'):
+        raise HTTPException(
+            status_code=400,
+            detail="Only .txt files are supported"
+        )
+    
+    # Validate num_samples
+    if num_samples < 1 or num_samples > 50:
+        raise HTTPException(
+            status_code=400,
+            detail="num_samples must be between 1 and 50"
+        )
+    
+    try:
+        # Read file content
+        content = await file.read()
+        text = content.decode('utf-8')
+        
+        if not text.strip():
+            raise HTTPException(
+                status_code=400,
+                detail="File is empty"
+            )
+        
+        # Generate dataset
+        data = await agent.generate(
+            text=text,
+            format_type=format_type,
+            num_samples=num_samples
+        )
+        
+        return GenerateResponse(
+            success=True,
+            format_type=format_type,
+            data=data,
+            message=f"Generated {len(data)} samples in {format_type} format"
+        )
+        
+    except UnicodeDecodeError:
+        raise HTTPException(
+            status_code=400,
+            detail="File must be UTF-8 encoded text"
+        )
+    except Exception as e:
+        return GenerateResponse(
+            success=False,
+            format_type=format_type,
+            data=[],
+            message=f"Error generating dataset: {str(e)}"
+        )
+
+
+@app.post("/api/generate-text")
+async def generate_from_text(
+    text: str = Form(...),
+    format_type: Literal["alpaca", "chat", "completion"] = Form(...),
+    num_samples: int = Form(default=5)
+):
+    """
+    Generate a dataset from raw text input (no file upload).
+    
+    Args:
+        text: Raw text content to process
+        format_type: Output format - 'alpaca', 'chat', or 'completion'
+        num_samples: Number of samples to generate (default: 5)
+        
+    Returns:
+        Generated dataset in the specified format
+    """
+    if not text.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="Text content is empty"
+        )
+    
+    if num_samples < 1 or num_samples > 50:
+        raise HTTPException(
+            status_code=400,
+            detail="num_samples must be between 1 and 50"
+        )
+    
+    try:
+        data = await agent.generate(
+            text=text,
+            format_type=format_type,
+            num_samples=num_samples
+        )
+        
+        return GenerateResponse(
+            success=True,
+            format_type=format_type,
+            data=data,
+            message=f"Generated {len(data)} samples in {format_type} format"
+        )
+        
+    except Exception as e:
+        return GenerateResponse(
+            success=False,
+            format_type=format_type,
+            data=[],
+            message=f"Error generating dataset: {str(e)}"
+        )
+
+
+if __name__ == "__main__":
+    uvicorn.run(
+        "main:app",
+        host="0.0.0.0",
+        port=8000,
+        reload=True
+    )
