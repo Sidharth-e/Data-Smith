@@ -1,0 +1,55 @@
+version: "3.8"
+
+services:
+  # Python API Server
+  api:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./server:/app
+      - storage_data:/app/storage
+    environment:
+      - DATABASE_URL=sqlite:///./storage/datasmith.db
+      - OLLAMA_HOST=http://host.docker.internal:11434
+    depends_on:
+      - redis
+    restart: unless-stopped
+    networks:
+      - datasmith
+
+  # Next.js Frontend
+  client:
+    build:
+      context: ./client
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
+    depends_on:
+      - api
+    restart: unless-stopped
+    networks:
+      - datasmith
+
+  # Redis for job queue (optional, future enhancement)
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    networks:
+      - datasmith
+
+volumes:
+  storage_data:
+  redis_data:
+
+networks:
+  datasmith:
+    driver: bridge
