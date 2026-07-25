@@ -1,6 +1,23 @@
-# Data Smith 🛠️
+<div align="center">
+  <img src="client/public/icon.svg" alt="Data Smith Logo - Dataset Generation Tool for Fine-Tuning LLMs" width="120" height="120" />
+  <h1>Data Smith</h1>
+  <p><strong>A powerful dataset generation tool for fine-tuning language models</strong></p>
+  <p>Transform raw text into structured training data formats using LangChain agents powered by Ollama.</p>
 
-A powerful dataset generation tool for fine-tuning language models. Transform raw text into structured training data formats using LangChain agents powered by Ollama.
+  <p>
+    <a href="https://github.com/sidharthe/Data-Smith/stargazers"><img alt="GitHub Stars" src="https://img.shields.io/github/stars/sidharthe/Data-Smith?style=for-the-badge&color=f04461" /></a>
+    <a href="https://github.com/sidharthe/Data-Smith/forks"><img alt="GitHub Forks" src="https://img.shields.io/github/forks/sidharthe/Data-Smith?style=for-the-badge&color=blue" /></a>
+    <a href="https://github.com/sidharthe/Data-Smith/issues"><img alt="GitHub Issues" src="https://img.shields.io/github/issues/sidharthe/Data-Smith?style=for-the-badge&color=orange" /></a>
+    <a href="./LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-green?style=for-the-badge" /></a>
+    <img alt="Built with Next.js" src="https://img.shields.io/badge/Next.js-16-black?style=for-the-badge&logo=next.js" />
+    <img alt="FastAPI" src="https://img.shields.io/badge/FastAPI-0.104-009688?style=for-the-badge&logo=fastapi" />
+    <img alt="Ollama" src="https://img.shields.io/badge/Ollama-Local%20LLM-f04461?style=for-the-badge" />
+  </p>
+</div>
+
+---
+
+> **Data Smith** is an open-source dataset generation tool that converts raw text into fine-tuning-ready formats (Alpaca, Chat, Completion) using local LLMs via Ollama and LangChain agents — no API costs, fully private.
 
 ## Features
 
