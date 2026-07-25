@@ -29,6 +29,20 @@ _DEFAULTS = {
     "llm_timeout": 600.0,
     "extra_attempts": 3,
     "max_revise_rounds": 2,
+    # --- Fact-driven pipeline (QualityAgent) ---
+    # When true, QualityAgent runs: extract facts -> reconcile -> plan per
+    # fact -> canonical answers -> generate per manifest -> critique -> revise.
+    # When false, QualityAgent falls back to the original batched loop.
+    "plan_per_fact": True,
+    "canonicalize_facts": True,
+    "capacity_gate": True,
+    # Max distinct samples (paraphrases) that may be generated per fact.
+    "max_paraphrases_per_fact": 2,
+    # Inject out-of-scope samples whose assistant answer is a polite refusal.
+    "allow_negatives": False,
+    "negatives_ratio": 0.1,
+    # Dedup strategy: "exact" | "question_hash" | "embedding".
+    "dedup_mode": "question_hash",
 }
 
 
@@ -48,6 +62,13 @@ def _generation_settings(config: Optional[dict] = None) -> dict:
     out["llm_timeout"] = float(out["llm_timeout"])
     out["extra_attempts"] = int(out["extra_attempts"])
     out["max_revise_rounds"] = int(out["max_revise_rounds"])
+    out["plan_per_fact"] = bool(out["plan_per_fact"])
+    out["canonicalize_facts"] = bool(out["canonicalize_facts"])
+    out["capacity_gate"] = bool(out["capacity_gate"])
+    out["max_paraphrases_per_fact"] = int(out["max_paraphrases_per_fact"])
+    out["allow_negatives"] = bool(out["allow_negatives"])
+    out["negatives_ratio"] = float(out["negatives_ratio"])
+    out["dedup_mode"] = str(out["dedup_mode"])
     return out
 
 
@@ -115,6 +136,12 @@ class DatasetAgent:
         self.max_concurrency = s["max_concurrency"]
         self.llm_timeout = s["llm_timeout"]
         self.extra_attempts = s["extra_attempts"]
+        self.dedup_mode = s["dedup_mode"]
+        self.max_paraphrases_per_fact = s["max_paraphrases_per_fact"]
+        # `_dedupe_key` is a staticmethod and reads the mode off the class
+        # attribute so it stays usable from QualityAgent (which shares the
+        # method) without threading an instance arg through every call site.
+        DatasetAgent._dedup_mode_runtime = self.dedup_mode
     
     def _extract_json_array(self, text: str) -> List[dict]:
         """Extract a JSON array from LLM response text.
@@ -568,35 +595,71 @@ Return ONLY the JSON array:""")
         return validated
     
     @staticmethod
-    def _dedupe_key(item: dict) -> str:
-        """Return a canonical key used to detect duplicate samples.
+    def _question_text(item: dict) -> str:
+        """Return the user-facing question/prompt portion of a sample.
 
-        Comparison is intentionally coarse (stripped, lowercased) so that
-        near-identical LLM output counts as a duplicate.
+        Used by dedup so two samples that differ only in the system role or
+        the assistant answer wording still count as the *same* question and
+        can be deduped. Returns "" if no recognizable question field exists.
         """
         if "messages" in item and isinstance(item["messages"], list):
+            for m in item["messages"]:
+                if isinstance(m, dict) and m.get("role") == "user":
+                    return str(m.get("content", "")).strip().lower()
+            # Fallback: join everything (no user turn found).
             return " ".join(
                 str(m.get("content", "")).strip().lower()
                 for m in item["messages"]
                 if isinstance(m, dict)
             )
         if "conversations" in item and isinstance(item["conversations"], list):
+            for m in item["conversations"]:
+                if isinstance(m, dict) and m.get("from") == "human":
+                    return str(m.get("value", "")).strip().lower()
             return " ".join(
                 str(m.get("value", "")).strip().lower()
                 for m in item["conversations"]
                 if isinstance(m, dict)
             )
         if "instruction" in item:
-            return "|".join(
-                str(item.get(k, "")).strip().lower() for k in ("instruction", "input", "output")
-            )
+            return str(item.get("instruction", "")).strip().lower()
         if "prompt" in item and "chosen" in item:
-            return "|".join(
-                str(item.get(k, "")).strip().lower() for k in ("prompt", "chosen", "rejected")
-            )
+            return str(item.get("prompt", "")).strip().lower()
         if "text" in item:
             return str(item["text"]).strip().lower()
-        return json.dumps(item, sort_keys=True).lower()
+        return ""
+
+    @staticmethod
+    def _dedupe_key(item: dict) -> str:
+        """Return a canonical key used to detect duplicate samples.
+
+        Comparison keys on the *question/prompt* portion only (see
+        `_question_text`), not the entire sample. This means 10 samples with
+        the same question but different system roles / answer phrasings now
+        collapse to a single entry instead of all surviving dedup.
+
+        A small `dedup_mode` knob (config `[generation].dedup_mode`) selects
+        between:
+          - "exact":         full question string (default-ish, tightest)
+          - "question_hash": normalized token bag (whitespace/punct-insensitive)
+          - "embedding":     same as "question_hash" for now; an embedding
+                             backend can be plugged in later without changing
+                             the call sites.
+        """
+        q = DatasetAgent._question_text(item)
+        if not q:
+            # Fall back to the whole-object hash so empty/unknown shapes
+            # still dedupe against themselves.
+            return json.dumps(item, sort_keys=True).lower()
+        mode = getattr(DatasetAgent, "_dedup_mode_runtime", "question_hash")
+        if mode == "exact":
+            return q
+        # Normalized token bag: lowercase, strip punctuation, sort tokens.
+        # This treats "What is Sidharth's focus?" and "what is sidharth's focus?"
+        # as the same question, while still distinguishing different questions.
+        tokens = re.sub(r"[^a-z0-9\s]", " ", q).split()
+        tokens.sort()
+        return " ".join(tokens)
 
     def _window(self, text: str, index: int, total: int) -> str:
         """Return a slice of the source text for batch `index` of `total`.
@@ -932,124 +995,22 @@ class QualityAgent(DatasetAgent):
         self.critic_llm = critic_llm or self.llm
         s = _generation_settings(config)
         self.max_revise_rounds = s["max_revise_rounds"]
+        self.plan_per_fact = s["plan_per_fact"]
+        self.canonicalize_facts = s["canonicalize_facts"]
+        self.capacity_gate = s["capacity_gate"]
+        self.max_paraphrases_per_fact = s["max_paraphrases_per_fact"]
+        self.allow_negatives = s["allow_negatives"]
+        self.negatives_ratio = s["negatives_ratio"]
         self._qa_graph = self.build_qa_graph()
 
     # ------------------------------------------------------------------
-    # Prompts
+    # Prompts + critique/revise helpers
     # ------------------------------------------------------------------
-    def _critic_prompt(self) -> ChatPromptTemplate:
-        return ChatPromptTemplate.from_messages([
-            ("system", """You are a strict quality reviewer for fine-tuning datasets.
-You are given a source text and a JSON array of candidate training samples.
-Score EACH sample against these criteria:
-- Faithfulness: claims must be supported by the source text.
-- Clarity: instruction/question is unambiguous.
-- Completeness: the output fully answers the instruction.
-- Format: matches the requested schema exactly.
-
-Return ONLY a JSON array (no prose) with one entry per input sample, in order.
-Each entry: {{"index": <0-based>, "verdict": "ok" | "revise", "reason": "<short reason or empty>"}}"""),
-            ("human", """Source text:
-{text}
-
-Candidate samples (JSON array):
-{samples}
-
-Return the JSON verdict array:"""),
-        ])
-
-    def _revise_prompt(self) -> ChatPromptTemplate:
-        return ChatPromptTemplate.from_messages([
-            ("system", """You are a dataset editor. Given one training sample and a
-critique, rewrite the sample to fix the problems. Keep the same schema.
-Return ONLY the single revised sample object as JSON, no array, no prose."""),
-            ("human", """Original sample:
-{sample}
-
-Critique:
-{critique}
-
-Source text (for reference):
-{text}
-
-Return the revised sample JSON:"""),
-        ])
-
-    # ------------------------------------------------------------------
-    # Critique + revise helpers
-    # ------------------------------------------------------------------
-    async def _critique(
-        self, source: str, samples: List[dict]
-    ) -> List[dict]:
-        """Return one verdict dict per sample: {"index","verdict","reason"}."""
-        if not samples:
-            return []
-        prompt = self._critic_prompt()
-        chain = prompt | self.critic_llm | self.parser
-        try:
-            raw = await asyncio.wait_for(
-                chain.ainvoke({
-                    "text": source[:self.source_char_limit],
-                    "samples": json.dumps(samples, ensure_ascii=False),
-                }),
-                timeout=self.llm_timeout,
-            )
-        except GenerationError:
-            raise
-        except Exception as exc:
-            raise map_llm_error(exc) from exc
-
-        verdicts = self._extract_json_array(raw)
-        # Normalise to a list of dicts with index/verdict/reason.
-        norm: List[dict] = []
-        for i, v in enumerate(verdicts):
-            if isinstance(v, dict):
-                norm.append({
-                    "index": v.get("index", i),
-                    "verdict": str(v.get("verdict", "ok")).lower(),
-                    "reason": str(v.get("reason", "")),
-                })
-            else:
-                norm.append({"index": i, "verdict": "ok", "reason": ""})
-        # Pad / trim to match sample count.
-        while len(norm) < len(samples):
-            norm.append({"index": len(norm), "verdict": "ok", "reason": ""})
-        return norm[: len(samples)]
-
-    async def _revise_one(
-        self, source: str, sample: dict, critique: str
-    ) -> dict:
-        """Return a revised single sample (raw dict)."""
-        prompt = self._revise_prompt()
-        chain = prompt | self.llm | self.parser
-        try:
-            raw = await asyncio.wait_for(
-                chain.ainvoke({
-                    "text": source[:self.source_char_limit],
-                    "sample": json.dumps(sample, ensure_ascii=False),
-                    "critique": critique,
-                }),
-                timeout=self.llm_timeout,
-            )
-        except GenerationError:
-            raise
-        except Exception as exc:
-            raise map_llm_error(exc) from exc
-
-        # The reviser should return a single object, not an array, but be
-        # lenient: accept a one-element array too.
-        parsed = self._extract_json_array(raw)
-        if isinstance(parsed, list) and parsed and isinstance(parsed[0], dict):
-            return parsed[0]
-        # Fallback: try to parse a bare object.
-        try:
-            obj = json.loads(raw.strip())
-            if isinstance(obj, dict):
-                return obj
-        except json.JSONDecodeError:
-            pass
-        # Last resort: return the original unchanged.
-        return sample
+    # The critic and revise prompts/handlers are defined later in this
+    # class (in the fact-driven pipeline section) where they are extended
+    # with uniqueness / consistency / canonical-answer checks. They are
+    # referenced by the QA subgraph nodes below via `self._critic_prompt()`
+    # / `self._critique()` / `self._revise_one()`.
 
     # ------------------------------------------------------------------
     # QA subgraph nodes
@@ -1168,6 +1129,621 @@ Return the revised sample JSON:"""),
         return list(result.get("samples", []))
 
     # ------------------------------------------------------------------
+    # Fact-driven pipeline (Phases 1-9)
+    # ------------------------------------------------------------------
+    # When `plan_per_fact` is enabled in config, QualityAgent replaces the
+    # batched generate->critique->revise loop with a fact-anchored pipeline:
+    #
+    #   1. extract_facts     - one LLM call returns discrete facts w/ evidence
+    #   2. reconcile_facts   - collapse ambiguous / conflicting facts so each
+    #                          fact has a single canonical statement
+    #   3. plan_manifest     - decide how many samples per fact (<= k), plus
+    #                          optional negative (out-of-scope) slots
+    #   4. canonical_answers - one answer per fact; paraphrases must agree
+    #   5. generate_anchored - each sample generated with its fact_id + plan
+    #   6. critique           - 6 criteria incl. uniqueness & consistency
+    #   7. revise             - reviser sees the canonical answer as ground truth
+    #   8. dedup              - per-fact cap + question-aware dedup (see
+    #                          `_dedupe_key`)
+    #   9. capacity_gate      - if requested > capacity, stop early + warn
+
+    def _fact_extraction_prompt(self) -> ChatPromptTemplate:
+        return ChatPromptTemplate.from_messages([
+            ("system", """You are a fact extractor. Given a source text, return a JSON array of DISTINCT, ATOMIC facts that can be learned from it.
+
+Each fact must be:
+- Atomic: a single, standalone piece of information (one fact per entry, NOT a cluster).
+- Faithful: directly supported by the source text (quote an evidence span).
+- Non-duplicative: do NOT repeat the same fact in different wording. If the source says the same thing twice, emit it ONCE and prefer the most specific phrasing.
+
+For each fact output: {{"id": "f1", "fact": "<one sentence>", "evidence": "<short quote from source>", "confidence": 0.0-1.0}}
+
+Order facts by importance / centrality to the source. Return ONLY the JSON array."""),
+            ("human", """Source text:
+{text}
+
+Return the facts JSON array:"""),
+        ])
+
+    def _reconcile_prompt(self) -> ChatPromptTemplate:
+        return ChatPromptTemplate.from_messages([
+            ("system", """You reconcile a list of facts that may overlap or contradict each other.
+Return a single deduplicated, consistent list of facts. When two facts say the same thing in different wording, keep the more SPECIFIC/COMPLETE one and drop the other. When two facts contradict, keep the one with the stronger evidence (longer quote, more specific) and drop the other. Preserve original ids when possible; renumber only if needed.
+Return ONLY a JSON array of {{"id","fact","evidence","confidence"}} objects."""),
+            ("human", """Facts (JSON):
+{facts}
+
+Return the reconciled facts JSON array:"""),
+        ])
+
+    def _plan_prompt(self) -> ChatPromptTemplate:
+        return ChatPromptTemplate.from_messages([
+            ("system", """You are a sample planner. Given a list of facts and a target sample count, decide how many training samples to generate for each fact.
+
+Rules:
+- Each fact may get between 0 and {max_per_fact} samples. Most facts should get 1; only central/important facts should get 2.
+- The total across all facts MUST be <= {capacity} (do not exceed the source's information capacity).
+- If {allow_negatives} is true, reserve roughly {neg_ratio_pct}% of the slots as "negative" samples whose answer is a polite refusal ("I don't have that information based on what I know."). Negatives must ask about facts NOT present in the source.
+- Distribute samples across facts broadly; do NOT concentrate samples on a single fact.
+
+Return a JSON array of manifest entries, each:
+{{"fact_id": "f1", "kind": "positive|negative", "style": "<short style hint e.g. direct-question|rephrase|role-play|comparison|out-of-scope>"}}
+
+Return ONLY the JSON array."""),
+            ("human", """Facts (JSON):
+{facts}
+
+Capacity (max samples): {capacity}
+Requested: {requested}
+
+Return the manifest JSON array:"""),
+        ])
+
+    def _canonical_answer_prompt(self) -> ChatPromptTemplate:
+        return ChatPromptTemplate.from_messages([
+            ("system", """You are a canonical answer writer. Given a source text and one fact, write the SINGLE authoritative answer to the question "What about <fact>?". This answer is the ground truth; all paraphrases of the question must produce an answer consistent with it. Be precise, complete, and faithful to the source. Do not add information that is not in the source.
+Return ONLY a single sentence/paragraph (no JSON)."""),
+            ("human", """Source text:
+{text}
+
+Fact:
+{fact}
+
+Return the canonical answer:"""),
+        ])
+
+    def _anchored_generate_prompt(self) -> ChatPromptTemplate:
+        return ChatPromptTemplate.from_messages([
+            ("system", """You are a dataset generator. Produce ONE training sample anchored to a specific fact and its canonical answer.
+
+Hard rules:
+- The sample's assistant/value/output MUST be consistent with the canonical answer. Do NOT introduce facts that are not in the canonical answer.
+- The user/value/instruction/question MUST match the requested style hint.
+- If kind is "negative", the question must ask about something NOT covered by the source, and the answer MUST be a polite refusal: "I don't have that information based on what I know."
+- Match the requested output schema EXACTLY.
+- Return ONLY the single sample object as JSON (no array, no prose)."""),
+            ("human", """Source text (for reference):
+{text}
+
+Fact:
+{fact}
+
+Canonical answer (ground truth):
+{canonical_answer}
+
+Requested style:
+{style}
+
+Kind: {kind}
+
+Format: {format_spec}
+
+Return the single sample JSON:"""),
+        ])
+
+    async def _extract_facts(self, text: str) -> List[dict]:
+        """Phase 1: return a list of {id, fact, evidence, confidence} dicts."""
+        prompt = self._fact_extraction_prompt()
+        raw = await self._run_chain(prompt, {"text": text[: self.source_char_limit]})
+        facts = self._extract_json_array(raw)
+        norm: List[dict] = []
+        for i, f in enumerate(facts):
+            if not isinstance(f, dict):
+                continue
+            norm.append({
+                "id": str(f.get("id", f"f{i + 1}")),
+                "fact": str(f.get("fact", "")).strip(),
+                "evidence": str(f.get("evidence", "")).strip(),
+                "confidence": float(f.get("confidence", 1.0)),
+            })
+        return [f for f in norm if f["fact"]]
+
+    async def _reconcile_facts(self, facts: List[dict], text: str) -> List[dict]:
+        """Phase 2: collapse overlapping / conflicting facts."""
+        if not facts or len(facts) <= 1:
+            return facts
+        prompt = self._reconcile_prompt()
+        raw = await self._run_chain(
+            prompt,
+            {
+                "facts": json.dumps(facts, ensure_ascii=False),
+                "text": text[: self.source_char_limit],
+            },
+        )
+        out = self._extract_json_array(raw)
+        norm: List[dict] = []
+        for i, f in enumerate(out):
+            if not isinstance(f, dict):
+                continue
+            norm.append({
+                "id": str(f.get("id", f"f{i + 1}")),
+                "fact": str(f.get("fact", "")).strip(),
+                "evidence": str(f.get("evidence", "")).strip(),
+                "confidence": float(f.get("confidence", 1.0)),
+            })
+        return norm or facts
+
+    def _compute_capacity(self, num_facts: int, requested: int) -> int:
+        """Phase 2b: max samples the source can support without forcing.
+
+        capacity = num_facts * max_paraphrases_per_fact (optionally +negatives).
+        If `capacity_gate` is off, returns `requested` (legacy behaviour).
+        """
+        if not self.capacity_gate:
+            return requested
+        base = num_facts * max(1, self.max_paraphrases_per_fact)
+        if self.allow_negatives:
+            base = int(base * (1.0 + self.negatives_ratio))
+        return base
+
+    async def _plan_manifest(
+        self, facts: List[dict], capacity: int, requested: int
+    ) -> List[dict]:
+        """Phase 3: produce a manifest of {fact_id, kind, style} entries."""
+        prompt = self._plan_prompt()
+        neg_pct = int(self.negatives_ratio * 100) if self.allow_negatives else 0
+        raw = await self._run_chain(
+            prompt,
+            {
+                "facts": json.dumps(facts, ensure_ascii=False),
+                "capacity": capacity,
+                "requested": min(requested, capacity),
+                "max_per_fact": self.max_paraphrases_per_fact,
+                "allow_negatives": "true" if self.allow_negatives else "false",
+                "neg_ratio_pct": neg_pct,
+            },
+        )
+        manifest = self._extract_json_array(raw)
+        norm: List[dict] = []
+        valid_ids = {f["id"] for f in facts}
+        for m in manifest:
+            if not isinstance(m, dict):
+                continue
+            kind = str(m.get("kind", "positive")).lower()
+            if kind not in ("positive", "negative"):
+                kind = "positive"
+            entry = {
+                "fact_id": str(m.get("fact_id", "")),
+                "kind": kind,
+                "style": str(m.get("style", "direct-question")),
+            }
+            # Negative slots have no fact_id by design; positive must reference a real fact.
+            if kind == "positive" and entry["fact_id"] not in valid_ids:
+                # Skip orphan positive entries.
+                continue
+            norm.append(entry)
+        # Hard cap at capacity so the planner can never exceed it.
+        return norm[:capacity]
+
+    async def _canonical_answer(self, text: str, fact: dict) -> str:
+        """Phase 4: produce one canonical answer for a fact."""
+        prompt = self._canonical_answer_prompt()
+        raw = await self._run_chain(
+            prompt,
+            {
+                "text": text[: self.source_char_limit],
+                "fact": fact.get("fact", ""),
+            },
+        )
+        return raw.strip()
+
+    async def _generate_anchored_sample(
+        self,
+        text: str,
+        fact: dict,
+        canonical_answer: str,
+        style: str,
+        kind: str,
+        format_type: str,
+    ) -> dict:
+        """Phase 5: generate one sample anchored to a fact + canonical answer."""
+        prompt = self._anchored_generate_prompt()
+        format_spec = self._format_spec_for(format_type)
+        raw = await self._run_chain(
+            prompt,
+            {
+                "text": text[: self.source_char_limit],
+                "fact": fact.get("fact", "") if kind == "positive" else "(out-of-scope)",
+                "canonical_answer": canonical_answer if kind == "positive" else "(none)",
+                "style": style,
+                "kind": kind,
+                "format_spec": format_spec,
+            },
+        )
+        parsed = self._extract_json_array(raw)
+        if parsed and isinstance(parsed[0], dict):
+            return parsed[0]
+        try:
+            obj = json.loads(raw.strip())
+            if isinstance(obj, dict):
+                return obj
+        except json.JSONDecodeError:
+            pass
+        return {}
+
+    def _format_spec_for(self, format_type: str) -> str:
+        """Return a short, machine-readable schema string per format."""
+        return {
+            "alpaca": '{"instruction": str, "input": str, "output": str}',
+            "chatml": '{"messages": [{"role": "system"|"user"|"assistant", "content": str}, ...]}',
+            "sharegpt": '{"conversations": [{"from": "human"|"gpt", "value": str}, ...]}',
+            "dpo": '{"prompt": str, "chosen": str, "rejected": str}',
+            "completion": '{"text": str}',
+        }.get(format_type, "")
+
+    async def _generate_fact_driven(
+        self,
+        text: str,
+        format_type: str,
+        num_samples: int,
+        validate,
+        on_event=None,
+    ) -> List[dict]:
+        """Run the full Phase 1-8 fact-driven pipeline. Returns final samples.
+
+        `on_event` is an optional async callback `await on_event(event_dict)`
+        used by the streaming path to forward SSE-style events. When None,
+        events are dropped (non-streaming caller just wants the final list).
+
+        Emits these event types (when `on_event` is provided):
+          - {"type": "facts_extracted", "count": int}
+          - {"type": "facts_reconciled", "count": int}
+          - {"type": "capacity_warning", "capacity": int, "requested": int}
+          - {"type": "plan_done", "count": int}
+          - {"type": "canonical_done", "count": int}
+          - {"type": "sample_generated", "index": int, "fact_id": str, "kind": str}
+          - {"type": "critique_start"}
+          - {"type": "revise_start", "count": int}
+          - {"type": "revise_done", "count": int}
+          - {"type": "progress", "done": int, "total": int, "samples_so_far": int}
+          - {"type": "complete", "data": [...], "count": int, "undergenerated": bool}
+        """
+        source = text[: self.source_char_limit]
+
+        async def emit(ev: dict) -> None:
+            if on_event is not None:
+                await on_event(ev)
+
+        # Phase 1: extract facts.
+        facts = await self._extract_facts(source)
+        await emit({"type": "facts_extracted", "count": len(facts)})
+        if not facts:
+            await emit({"type": "complete", "data": [], "count": 0, "undergenerated": True})
+            return []
+
+        # Phase 2: reconcile (collapse overlaps / contradictions).
+        if self.canonicalize_facts:
+            facts = await self._reconcile_facts(facts, source)
+        await emit({"type": "facts_reconciled", "count": len(facts)})
+
+        # Phase 2b: capacity gate (don't force).
+        capacity = self._compute_capacity(len(facts), num_samples)
+        requested = min(num_samples, capacity)
+        undergenerated = self.capacity_gate and num_samples > capacity
+        if undergenerated:
+            await emit({
+                "type": "capacity_warning",
+                "capacity": capacity,
+                "requested": num_samples,
+            })
+
+        # Phase 3: plan the manifest.
+        manifest = await self._plan_manifest(facts, capacity, requested)
+        await emit({"type": "plan_done", "count": len(manifest)})
+
+        # Phase 4: canonical answers (one per fact; bounded concurrency).
+        canonical: Dict[str, str] = {}
+        sem = asyncio.Semaphore(self.max_concurrency)
+
+        async def canon_one(fact: dict) -> None:
+            async with sem:
+                canonical[fact["id"]] = await self._canonical_answer(source, fact)
+
+        await asyncio.gather(*(canon_one(f) for f in facts))
+        await emit({"type": "canonical_done", "count": len(canonical)})
+
+        # Phase 5 + 6 + 7: generate anchored samples, then critique/revise.
+        validate_fn = validate
+        results: List[dict] = []
+        seen_keys: set[str] = set()
+        accepted_questions: List[str] = []
+        per_fact_count: Dict[str, int] = {}
+        total = len(manifest)
+
+        for i, entry in enumerate(manifest):
+            fact_id = entry.get("fact_id", "")
+            kind = entry.get("kind", "positive")
+            style = entry.get("style", "direct-question")
+            fact = next((f for f in facts if f["id"] == fact_id), {})
+            canon = canonical.get(fact_id, "") if kind == "positive" else ""
+
+            try:
+                sample = await self._generate_anchored_sample(
+                    source, fact, canon, style, kind, format_type
+                )
+            except GenerationError as exc:
+                logger.warning("Anchored gen %d failed: %s", i, exc)
+                sample = {}
+            except Exception as exc:
+                logger.warning("Anchored gen %d failed: %s", i, exc)
+                sample = {}
+
+            await emit({
+                "type": "sample_generated",
+                "index": i,
+                "fact_id": fact_id,
+                "kind": kind,
+            })
+
+            if not sample:
+                await emit({
+                    "type": "progress",
+                    "done": i + 1,
+                    "total": total,
+                    "samples_so_far": len(results),
+                })
+                continue
+
+            # Phase 8 (a): per-fact cap + question dedup BEFORE critique so
+            # we never exceed max_paraphrases_per_fact for a single fact.
+            key = self._dedupe_key(sample)
+            if kind == "positive":
+                if per_fact_count.get(fact_id, 0) >= self.max_paraphrases_per_fact:
+                    await emit({
+                        "type": "progress",
+                        "done": i + 1,
+                        "total": total,
+                        "samples_so_far": len(results),
+                    })
+                    continue
+            if not key or key in seen_keys:
+                await emit({
+                    "type": "progress",
+                    "done": i + 1,
+                    "total": total,
+                    "samples_so_far": len(results),
+                })
+                continue
+
+            # Phase 6: critique (extended).
+            await emit({"type": "critique_start"})
+            try:
+                verdicts = await self._critique(
+                    source,
+                    [sample],
+                    accepted_questions=accepted_questions,
+                    canonical_answers={fact_id: canon} if canon else {},
+                )
+            except GenerationError as exc:
+                logger.warning("Critique %d failed: %s", i, exc)
+                verdicts = [{"index": 0, "verdict": "ok", "reason": ""}]
+
+            current = sample
+            rounds = 0
+            while verdicts and verdicts[0].get("verdict") == "revise" and rounds < self.max_revise_rounds:
+                await emit({"type": "revise_start", "count": 1})
+                try:
+                    revised = await self._revise_one(
+                        source, current, verdicts[0].get("reason", ""),
+                        canonical_answer=canon,
+                    )
+                except GenerationError as exc:
+                    logger.warning("Revise %d failed: %s", i, exc)
+                    revised = current
+                current = revised
+                rounds += 1
+                await emit({"type": "revise_done", "count": 1})
+                try:
+                    verdicts = await self._critique(
+                        source,
+                        [current],
+                        accepted_questions=accepted_questions,
+                        canonical_answers={fact_id: canon} if canon else {},
+                    )
+                except GenerationError as exc:
+                    logger.warning("Critique (revise) %d failed: %s", i, exc)
+                    break
+
+            # Phase 8 (b): re-validate schema, then accept.
+            validated = validate_fn([current], 1)
+            if not validated:
+                await emit({
+                    "type": "progress",
+                    "done": i + 1,
+                    "total": total,
+                    "samples_so_far": len(results),
+                })
+                continue
+
+            final = validated[0]
+            # Re-check dedup after potential revision changes the question.
+            final_key = self._dedupe_key(final)
+            if not final_key or final_key in seen_keys:
+                await emit({
+                    "type": "progress",
+                    "done": i + 1,
+                    "total": total,
+                    "samples_so_far": len(results),
+                })
+                continue
+            seen_keys.add(final_key)
+            if kind == "positive":
+                per_fact_count[fact_id] = per_fact_count.get(fact_id, 0) + 1
+            results.append(final)
+            accepted_questions.append(self._question_text(final))
+            await emit({
+                "type": "progress",
+                "done": i + 1,
+                "total": total,
+                "samples_so_far": len(results),
+            })
+
+        trimmed = results[:requested]
+        await emit({
+            "type": "complete",
+            "data": trimmed,
+            "count": len(trimmed),
+            "undergenerated": undergenerated or len(trimmed) < num_samples,
+        })
+        return trimmed
+
+    # ---- Critic (Phase 6): extended criteria incl. uniqueness/consistency
+    def _critic_prompt(self) -> ChatPromptTemplate:
+        return ChatPromptTemplate.from_messages([
+            ("system", """You are a strict quality reviewer for fine-tuning datasets.
+You are given a source text and a JSON array of candidate training samples.
+Score EACH sample against these criteria:
+- Faithfulness: claims must be supported by the source text.
+- Clarity: instruction/question is unambiguous.
+- Completeness: the output fully answers the instruction.
+- Format: matches the requested schema exactly.
+- Uniqueness: the sample's question is NOT a near-duplicate of another sample's question already accepted (provided as `accepted_questions`).
+- Consistency: if a `canonical_answer` is provided, the sample's answer must agree with it (no new facts, no contradictions).
+- Out-of-scope: if the sample is marked kind="negative", the answer must be a polite refusal, NOT a fabricated fact.
+
+Return ONLY a JSON array (no prose) with one entry per input sample, in order.
+Each entry: {{"index": <0-based>, "verdict": "ok" | "revise", "reason": "<short reason or empty>"}}"""),
+            ("human", """Source text:
+{text}
+
+Accepted questions so far (for uniqueness check):
+{accepted_questions}
+
+Canonical answers keyed by fact_id (for consistency check):
+{canonical_answers}
+
+Candidate samples (JSON array):
+{samples}
+
+Return the JSON verdict array:"""),
+        ])
+
+    async def _critique(
+        self,
+        source: str,
+        samples: List[dict],
+        accepted_questions: Optional[List[str]] = None,
+        canonical_answers: Optional[Dict[str, str]] = None,
+    ) -> List[dict]:
+        """Phase 6: extended critique with uniqueness + consistency checks."""
+        if not samples:
+            return []
+        prompt = self._critic_prompt()
+        chain = prompt | self.critic_llm | self.parser
+        try:
+            raw = await asyncio.wait_for(
+                chain.ainvoke({
+                    "text": source[: self.source_char_limit],
+                    "samples": json.dumps(samples, ensure_ascii=False),
+                    "accepted_questions": json.dumps(
+                        accepted_questions or [], ensure_ascii=False
+                    ),
+                    "canonical_answers": json.dumps(
+                        canonical_answers or {}, ensure_ascii=False
+                    ),
+                }),
+                timeout=self.llm_timeout,
+            )
+        except GenerationError:
+            raise
+        except Exception as exc:
+            raise map_llm_error(exc) from exc
+
+        verdicts = self._extract_json_array(raw)
+        norm: List[dict] = []
+        for i, v in enumerate(verdicts):
+            if isinstance(v, dict):
+                norm.append({
+                    "index": v.get("index", i),
+                    "verdict": str(v.get("verdict", "ok")).lower(),
+                    "reason": str(v.get("reason", "")),
+                })
+            else:
+                norm.append({"index": i, "verdict": "ok", "reason": ""})
+        while len(norm) < len(samples):
+            norm.append({"index": len(norm), "verdict": "ok", "reason": ""})
+        return norm[: len(samples)]
+
+    # ---- Reviser (Phase 7): sees canonical answer as ground truth
+    def _revise_prompt(self) -> ChatPromptTemplate:
+        return ChatPromptTemplate.from_messages([
+            ("system", """You are a dataset editor. Given one training sample and a critique, rewrite the sample to fix the problems. Keep the same schema.
+
+If a `canonical_answer` is provided, the revised answer MUST agree with it (no new facts, no contradictions). If kind is "negative", the answer must remain a polite refusal.
+
+Return ONLY the single revised sample object as JSON, no array, no prose."""),
+            ("human", """Original sample:
+{sample}
+
+Critique:
+{critique}
+
+Canonical answer (ground truth, if any):
+{canonical_answer}
+
+Source text (for reference):
+{text}
+
+Return the revised sample JSON:"""),
+        ])
+
+    async def _revise_one(
+        self,
+        source: str,
+        sample: dict,
+        critique: str,
+        canonical_answer: Optional[str] = None,
+    ) -> dict:
+        """Phase 7: revise one sample, anchored to the canonical answer."""
+        prompt = self._revise_prompt()
+        chain = prompt | self.llm | self.parser
+        try:
+            raw = await asyncio.wait_for(
+                chain.ainvoke({
+                    "text": source[: self.source_char_limit],
+                    "sample": json.dumps(sample, ensure_ascii=False),
+                    "critique": critique,
+                    "canonical_answer": canonical_answer or "(none)",
+                }),
+                timeout=self.llm_timeout,
+            )
+        except GenerationError:
+            raise
+        except Exception as exc:
+            raise map_llm_error(exc) from exc
+
+        parsed = self._extract_json_array(raw)
+        if isinstance(parsed, list) and parsed and isinstance(parsed[0], dict):
+            return parsed[0]
+        try:
+            obj = json.loads(raw.strip())
+            if isinstance(obj, dict):
+                return obj
+        except json.JSONDecodeError:
+            pass
+        return sample
+
+    # ------------------------------------------------------------------
     # Public API mirrors DatasetAgent.generate / generate_stream
     # ------------------------------------------------------------------
     async def generate(
@@ -1187,6 +1763,13 @@ Return the revised sample JSON:"""),
         if handler is None:
             raise ValueError(f"Unknown format type: {format_type}")
         validate = self._validator_for(format_type)
+
+        # Fact-driven pipeline (Phases 1-8) when enabled; otherwise the
+        # original batched generate->critique->revise loop.
+        if self.plan_per_fact:
+            return await self._generate_fact_driven(
+                text, format_type, num_samples, validate, on_event=None
+            )
 
         if num_samples <= self.batch_size:
             return await self._generate_batch_with_qa(
@@ -1255,6 +1838,48 @@ Return the revised sample JSON:"""),
         if handler is None:
             raise ValueError(f"Unknown format type: {format_type}")
         validate = self._validator_for(format_type)
+
+        # Fact-driven pipeline: forward the fact-driven events straight
+        # through, wrapped in a "start" / final "complete".
+        if self.plan_per_fact:
+            yield {
+                "type": "start",
+                "format_type": format_type,
+                "num_samples": num_samples,
+                "mode": "quality",
+                "pipeline": "fact_driven",
+            }
+            # The fact-driven pipeline calls `on_event` synchronously while
+            # it awaits; we bridge those callbacks into this generator by
+            # pushing events onto a queue and yielding them in order.
+            ev_queue: "asyncio.Queue[Optional[dict]]" = asyncio.Queue()
+            _SENTINEL = object()
+
+            async def on_event(ev: dict) -> None:
+                await ev_queue.put(ev)
+
+            async def run_pipeline() -> None:
+                try:
+                    await self._generate_fact_driven(
+                        text, format_type, num_samples, validate, on_event=on_event
+                    )
+                except Exception as exc:
+                    await ev_queue.put({"type": "error", "message": str(exc)})
+                finally:
+                    await ev_queue.put(None)  # type: ignore[arg-type]
+
+            task = asyncio.create_task(run_pipeline())
+            try:
+                while True:
+                    ev = await ev_queue.get()
+                    if ev is None:
+                        break
+                    yield ev
+            finally:
+                if not task.done():
+                    task.cancel()
+                await task
+            return
 
         if num_samples <= self.batch_size:
             num_batches = 1

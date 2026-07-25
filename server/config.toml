@@ -80,6 +80,29 @@ extra_attempts = 3
 # the latest revision (or drop the sample).
 max_revise_rounds = 2
 
+# --- Fact-driven pipeline (QualityAgent only) ---
+# When true, QualityAgent runs: extract facts -> reconcile -> plan per
+# fact -> canonical answers -> generate per manifest -> extended critique
+# -> revise. Falls back to the original batched loop when false.
+plan_per_fact = true
+canonicalize_facts = true
+# Stop at the source's information capacity instead of forcing the
+# requested count by padding with duplicates / fabricated contradictions.
+# capacity = num_facts * max_paraphrases_per_fact (+negatives).
+capacity_gate = true
+# Max distinct samples (paraphrases) per fact. Keeps the model from
+# overfitting to a single phrasing.
+max_paraphrases_per_fact = 2
+# Inject out-of-scope samples whose assistant answer is a polite refusal,
+# so the model learns not to fabricate.
+allow_negatives = false
+negatives_ratio = 0.1
+# Dedup strategy used by both DatasetAgent and QualityAgent.
+#   "exact"         - full question string
+#   "question_hash" - normalized token bag (default)
+#   "embedding"     - reserved for a future embedding backend
+dedup_mode = "question_hash"
+
 # ============================================================
 # Research agent tuning
 # The multi-agent research pipeline (planner / researcher / gap /
