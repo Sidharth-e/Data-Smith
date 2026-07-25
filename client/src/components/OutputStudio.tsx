@@ -41,14 +41,19 @@ export default function OutputStudio({ result, loading, stream, onClearLogs }: O
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const handleDownload = () => {
+  const handleDownload = (format: "json" | "jsonl" = "json") => {
     if (!result?.data) return;
-    const jsonStr = JSON.stringify(result.data, null, 2);
-    const blob = new Blob([jsonStr], { type: "application/json" });
+    const content =
+      format === "jsonl"
+        ? result.data.map((item) => JSON.stringify(item)).join("\n")
+        : JSON.stringify(result.data, null, 2);
+    const blob = new Blob([content], {
+      type: format === "jsonl" ? "application/x-jsonlines" : "application/json",
+    });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `dataset_${result.format_type || "export"}_${Date.now()}.json`;
+    a.download = `dataset_${result.format_type || "export"}_${Date.now()}.${format}`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -163,16 +168,27 @@ export default function OutputStudio({ result, loading, stream, onClearLogs }: O
                 <span>{copied ? "Copied" : "Copy"}</span>
               </button>
 
-              <button
-                type="button"
-                onClick={handleDownload}
-                className="h-small px-m rounded-lg bg-primary hover:bg-primary-hover text-white text-xs font-extrabold flex items-center gap-1.5 transition-all shadow-2xs"
-              >
-                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                </svg>
-                <span>Export JSON</span>
-              </button>
+              <div className="flex items-center gap-0.5">
+                <button
+                  type="button"
+                  onClick={() => handleDownload("json")}
+                  className="h-small px-m rounded-l-lg border border-r-0 border-border bg-card text-foreground hover:bg-muted text-xs font-bold flex items-center gap-1.5 transition-all shadow-2xs"
+                >
+                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                  </svg>
+                  <span>JSON</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleDownload("jsonl")}
+                  className="h-small px-m rounded-r-lg border border-border bg-card text-foreground hover:bg-muted text-xs font-bold flex items-center gap-1.5 transition-all shadow-2xs"
+                  title="Export as JSONL (one JSON object per line - ideal for LLM fine-tuning)"
+                >
+                  <span>JSONL</span>
+                  <span className="text-[9px] text-secondary font-mono">train</span>
+                </button>
+              </div>
             </div>
           )}
         </div>
