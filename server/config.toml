@@ -22,7 +22,7 @@ origins = [
 
 [llm]
 # Which provider to use: "ollama" (local), "ollama_cloud", or "gemini"
-provider = "ollama_cloud"
+provider = "ollama"
 # Sampling temperature applied to every provider
 temperature = 0.7
 
