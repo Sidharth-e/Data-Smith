@@ -24,7 +24,7 @@ logger = logging.getLogger("data_smith")
 # Defaults used when the [generation] section is absent from config.toml.
 _DEFAULTS = {
     "batch_size": 10,
-    "source_char_limit": 4000,
+    "source_char_limit": 12000,
     "max_concurrency": 1,
     "llm_timeout": 600.0,
     "extra_attempts": 3,
@@ -252,6 +252,14 @@ class DatasetAgent:
             ("system", """You are a dataset generator for fine-tuning language models.
 Your task is to create instruction-following training data in Alpaca format.
 
+The source text may be anything: a resume, an article, documentation, a report,
+a product description, a biography, etc. Use ALL of the information present in
+the source, regardless of its type. Do not silently drop or invent information;
+the samples must be faithful to the source.
+
+Diversify the samples across the full breadth of the source so each sample
+covers a distinct fact or topic rather than paraphrasing the same point.
+
 IMPORTANT: Return ONLY a valid JSON array, no other text."""),
             ("human", """Based on the following source text, generate {num_samples} training examples in Alpaca format.
 
@@ -262,6 +270,9 @@ Generate a JSON array with exactly {num_samples} objects. Each object must have:
 - "instruction": A clear task or question
 - "input": Optional context or input data (can be empty string)
 - "output": The expected response
+
+Cover the full breadth of the source. Include samples about any identifying
+information, facts, figures, or topics that appear in the source.
 
 Example format:
 [
@@ -309,6 +320,14 @@ Return ONLY the JSON array:""")
             ("system", """You are a dataset generator for fine-tuning language models.
 Your task is to create conversational training data in ChatML format.
 
+The source text may be anything: a resume, an article, documentation, a report,
+a product description, a biography, etc. Use ALL of the information present in
+the source, regardless of its type. Do not silently drop or invent information;
+the samples must be faithful to the source.
+
+Diversify the samples across the full breadth of the source so each sample
+covers a distinct fact or topic rather than paraphrasing the same point.
+
 IMPORTANT: Return ONLY a valid JSON array, no other text."""),
             ("human", """Based on the following source text, generate {num_samples} conversations in ChatML format.
 
@@ -319,6 +338,9 @@ Generate a JSON array with exactly {num_samples} objects. Each object must have 
 - A "system" message defining the assistant's role
 - A "user" message with a question or request
 - An "assistant" message with the response
+
+Cover the full breadth of the source. Include samples about any identifying
+information, facts, figures, or topics that appear in the source.
 
 Example format:
 [
@@ -368,6 +390,14 @@ Return ONLY the JSON array:""")
             ("system", """You are a dataset generator for fine-tuning language models.
 Your task is to create conversational training data in ShareGPT format.
 
+The source text may be anything: a resume, an article, documentation, a report,
+a product description, a biography, etc. Use ALL of the information present in
+the source, regardless of its type. Do not silently drop or invent information;
+the samples must be faithful to the source.
+
+Diversify the samples across the full breadth of the source so each sample
+covers a distinct fact or topic rather than paraphrasing the same point.
+
 IMPORTANT: Return ONLY a valid JSON array, no other text."""),
             ("human", """Based on the following source text, generate {num_samples} conversations in ShareGPT format.
 
@@ -375,6 +405,9 @@ Source Text:
 {text}
 
 Generate a JSON array with exactly {num_samples} objects. Each object must have a "conversations" array containing objects with "from" and "value" keys. "from" should be either "human" or "gpt".
+
+Cover the full breadth of the source. Include samples about any identifying
+information, facts, figures, or topics that appear in the source.
 
 Example format:
 [
@@ -423,6 +456,14 @@ Return ONLY the JSON array:""")
             ("system", """You are a dataset generator for fine-tuning language models.
 Your task is to create preference alignment training data in DPO format.
 
+The source text may be anything: a resume, an article, documentation, a report,
+a product description, a biography, etc. Use ALL of the information present in
+the source, regardless of its type. Do not silently drop or invent information;
+the samples must be faithful to the source.
+
+Diversify the prompts across the full breadth of the source so each prompt
+covers a distinct fact or topic rather than paraphrasing the same point.
+
 IMPORTANT: Return ONLY a valid JSON array, no other text."""),
             ("human", """Based on the following source text, generate {num_samples} preference pairs in DPO format.
 
@@ -431,8 +472,12 @@ Source Text:
 
 Generate a JSON array with exactly {num_samples} objects. Each object must have:
 - "prompt": The instruction or question based on the text
-- "chosen": A high-quality correct response
+- "chosen": A high-quality correct response grounded in the source
 - "rejected": A poor-quality or incorrect response
+
+Cover the full breadth of the source. For each prompt, the chosen response
+should be accurate to the source and the rejected response should be vague or
+incorrect.
 
 Example format:
 [
@@ -483,6 +528,15 @@ Return ONLY the JSON array:""")
             ("system", """You are a dataset generator for fine-tuning language models.
 Your task is to create text completion training data.
 
+The source text may be anything: a resume, an article, documentation, a report,
+a product description, a biography, etc. Use ALL of the information present in
+the source, regardless of its type. Do not silently drop or invent information;
+the samples must be faithful to the source.
+
+Diversify the completions across the full breadth of the source so each
+completion covers a distinct fact or topic rather than paraphrasing the same
+point.
+
 IMPORTANT: Return ONLY a valid JSON array, no other text."""),
             ("human", """Based on the following source text, generate {num_samples} text completions.
 
@@ -491,6 +545,9 @@ Source Text:
 
 Generate a JSON array with exactly {num_samples} objects. Each object must have:
 - "text": A complete, coherent paragraph or passage derived from the source
+
+Cover the full breadth of the source. Include completions about any
+identifying information, facts, figures, or topics that appear in the source.
 
 Example format:
 [

@@ -62,7 +62,7 @@ timeout = "${GEMINI_TIMEOUT:-600}"
 # truncate when asked for a large JSON array in one shot.
 batch_size = 10
 # Cap on the source text fed to the model per call (characters).
-source_char_limit = 4000
+source_char_limit = 12000
 # Maximum number of LLM calls to run concurrently. Local Ollama usually
 # serves one request at a time; raise this for cloud / multi-instance
 # backends.
