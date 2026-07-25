@@ -9,26 +9,29 @@
     <a href="https://github.com/sidharthe/Data-Smith/forks"><img alt="GitHub Forks" src="https://img.shields.io/github/forks/sidharthe/Data-Smith?style=for-the-badge&color=blue" /></a>
     <a href="https://github.com/sidharthe/Data-Smith/issues"><img alt="GitHub Issues" src="https://img.shields.io/github/issues/sidharthe/Data-Smith?style=for-the-badge&color=orange" /></a>
     <a href="./LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-green?style=for-the-badge" /></a>
-    <img alt="Built with Next.js" src="https://img.shields.io/badge/Next.js-16-black?style=for-the-badge&logo=next.js" />
-    <img alt="FastAPI" src="https://img.shields.io/badge/FastAPI-0.104-009688?style=for-the-badge&logo=fastapi" />
+    <img alt="Built with Next.js" src="https://img.shields.io/badge/Next.js-16.0.8-black?style=for-the-badge&logo=next.js" />
+    <img alt="FastAPI" src="https://img.shields.io/badge/FastAPI-0.115.0-009688?style=for-the-badge&logo=fastapi" />
     <img alt="LangGraph" src="https://img.shields.io/badge/LangGraph-0.2.0-blue?style=for-the-badge" />
   </p>
 </div>
 
 ---
 
-> **Data Smith** is an open-source dataset generation tool that converts raw text into fine-tuning-ready formats (Alpaca, Chat, Completion) using LLMs. It features deep research capabilities, real-time streaming, and supports multiple providers including local Ollama and Google Gemini.
+> **Data Smith** is an open-source dataset generation tool that converts raw text into fine-tuning-ready formats (Alpaca, ChatML, ShareGPT, DPO, Completion) using LLMs. It features deep research capabilities, real-time streaming, and supports multiple providers including local Ollama and Google Gemini.
 
 ## Features
 
 - **🧠 Deep Research Agent** - Multi-agent LangGraph pipeline (planner, researcher, writer) that searches the web to synthesize comprehensive source documents.
 - **⚡ Real-time Streaming** - Watch datasets generate in real-time with granular progress and thinking state updates.
 - **🔌 Multi-Provider Support** - Native support for Local Ollama, Ollama Cloud, and Google Gemini via a simple `config.toml`.
-- **🎯 3 Output Formats**:
+- **🎯 5 Output Formats**:
   - **Alpaca** - Instruction / input / output pairs.
-  - **Chat** - Conversational messages with roles.
+  - **ChatML** - Conversational messages with roles.
+  - **ShareGPT** - Multi-turn conversations for conversational AI.
+  - **DPO** - Direct Preference Optimization pairs (prompt, chosen, rejected).
   - **Completion** - Raw text continuations.
-- **🎨 Modern Workbench UI** - Includes Dark Mode, Command Palette, Split View layout, and multiple view modes (JSON, Table, Cards).
+- **🎨 Modern Workbench UI** - Includes Dark Mode, Command Palette, Vertical Split View layout, subtle grid aesthetics, and multiple view modes (JSON, Table, Cards).
+- **♿ 100% Accessible** - Fully WCAG compliant with optimized contrast, semantic HTML, and complete screen reader support.
 - **📥 JSON Export** - Download your generated datasets instantly.
 
 ## Architecture
@@ -97,7 +100,7 @@ pnpm dev
 ## Usage
 
 1. **Input Data**: Upload a `.txt` file, paste text directly, or use the **Research** feature to synthesize a document from the web.
-2. **Configure**: Select your desired output format (Alpaca / Chat / Completion) and adjust the number of samples.
+2. **Configure**: Select your desired output format (Alpaca / ChatML / ShareGPT / DPO / Completion) and adjust the number of samples.
 3. **Generate**: Click Generate to stream results in real-time.
 4. **Export**: View the output in JSON, Table, or Card formats and download the generated dataset.
 
@@ -112,7 +115,7 @@ pnpm dev
 }
 ```
 
-### Chat
+### ChatML
 ```json
 {
   "messages": [
@@ -120,6 +123,26 @@ pnpm dev
     { "role": "user", "content": "What is..." },
     { "role": "assistant", "content": "It is..." }
   ]
+}
+```
+
+### ShareGPT
+```json
+{
+  "conversations": [
+    { "from": "system", "value": "You are an expert..." },
+    { "from": "human", "value": "What is..." },
+    { "from": "gpt", "value": "It is..." }
+  ]
+}
+```
+
+### DPO
+```json
+{
+  "prompt": "What is the capital of France?",
+  "chosen": "The capital of France is Paris.",
+  "rejected": "I think it's Berlin."
 }
 ```
 
@@ -143,10 +166,10 @@ pnpm dev
 
 ## Tech Stack
 
-- **Frontend**: Next.js 16, React 19, Tailwind CSS 4, Zustand
+- **Frontend**: Next.js 16, React 19, Tailwind CSS 4, Zustand, TanStack Query
 - **Backend**: FastAPI, LangChain, LangGraph
 - **LLM Support**: Ollama (Local/Cloud), Google Gemini
-- **Formats**: Alpaca, Chat, Completion
+- **Formats**: Alpaca, ChatML, ShareGPT, DPO, Completion
 
 ## License
 
