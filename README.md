@@ -5,9 +5,6 @@
   <p>Transform raw text into structured training data formats using LangChain agents powered by Ollama and Gemini.</p>
 
   <p>
-    <a href="https://github.com/sidharthe/Data-Smith/stargazers"><img alt="GitHub Stars" src="https://img.shields.io/github/stars/sidharthe/Data-Smith?style=for-the-badge&color=f04461" /></a>
-    <a href="https://github.com/sidharthe/Data-Smith/forks"><img alt="GitHub Forks" src="https://img.shields.io/github/forks/sidharthe/Data-Smith?style=for-the-badge&color=blue" /></a>
-    <a href="https://github.com/sidharthe/Data-Smith/issues"><img alt="GitHub Issues" src="https://img.shields.io/github/issues/sidharthe/Data-Smith?style=for-the-badge&color=orange" /></a>
     <a href="./LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-green?style=for-the-badge" /></a>
     <img alt="Built with Next.js" src="https://img.shields.io/badge/Next.js-16.0.8-black?style=for-the-badge&logo=next.js" />
     <img alt="FastAPI" src="https://img.shields.io/badge/FastAPI-0.115.0-009688?style=for-the-badge&logo=fastapi" />
