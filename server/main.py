@@ -5,10 +5,11 @@ FastAPI server for Data Smith - Dataset Generation Tool.
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
 from typing import Literal
+import json
 import logging
 import traceback
 import uvicorn
@@ -245,6 +246,90 @@ async def generate_from_text(
     except Exception as e:
         logger.error("Dataset generation failed: %s\n%s", str(e), traceback.format_exc())
         raise GenerationError(f"Unexpected error: {e}") from e
+
+
+def _sse(event: dict) -> str:
+    """Format a dict as a Server-Sent Events `data:` line."""
+    return f"data: {json.dumps(event)}\n\n"
+
+
+@app.post("/api/generate-stream")
+async def generate_dataset_stream(
+    file: UploadFile = File(...),
+    format_type: Literal["alpaca", "chat", "completion"] = Form(...),
+    num_samples: int = Form(default=5),
+):
+    """
+    Stream a dataset generation from an uploaded text file.
+
+    Returns an SSE stream of structured events: start, batch_start,
+    thinking, token, batch_done, progress, warning, complete, error.
+    """
+    if not file.filename or not file.filename.endswith('.txt'):
+        raise HTTPException(status_code=400, detail="Only .txt files are supported")
+    if num_samples < 1 or num_samples > 1000:
+        raise HTTPException(status_code=400, detail="num_samples must be between 1 and 1000")
+
+    content = await file.read()
+    try:
+        text = content.decode('utf-8')
+    except UnicodeDecodeError:
+        raise HTTPException(status_code=400, detail="File must be UTF-8 encoded text")
+    if not text.strip():
+        raise HTTPException(status_code=400, detail="File is empty")
+
+    logger.info(
+        "Streaming dataset: file=%s format=%s samples=%d chars=%d",
+        file.filename, format_type, num_samples, len(text)
+    )
+    return _build_sse_response(text, format_type, num_samples)
+
+
+@app.post("/api/generate-text-stream")
+async def generate_from_text_stream(
+    text: str = Form(...),
+    format_type: Literal["alpaca", "chat", "completion"] = Form(...),
+    num_samples: int = Form(default=5),
+):
+    """
+    Stream a dataset generation from raw text input (no file upload).
+
+    Returns an SSE stream of structured events (see /api/generate-stream).
+    """
+    if not text.strip():
+        raise HTTPException(status_code=400, detail="Text content is empty")
+    if num_samples < 1 or num_samples > 1000:
+        raise HTTPException(status_code=400, detail="num_samples must be between 1 and 1000")
+
+    logger.info(
+        "Streaming dataset from text: format=%s samples=%d chars=%d",
+        format_type, num_samples, len(text)
+    )
+    return _build_sse_response(text, format_type, num_samples)
+
+
+def _build_sse_response(text: str, format_type: str, num_samples: int):
+    """Wrap the agent's `generate_stream` generator into an SSE StreamingResponse."""
+    async def event_source():
+        try:
+            async for ev in agent.generate_stream(text, format_type, num_samples):
+                yield _sse(ev)
+        except GenerationError as exc:
+            yield _sse({"type": "error", "message": exc.user_message})
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.error("Streaming generation failed: %s\n%s", exc, traceback.format_exc())
+            yield _sse({"type": "error", "message": f"Unexpected error: {exc}"})
+
+    headers = {
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        "X-Accel-Buffering": "no",  # disable proxy buffering (nginx)
+    }
+    return StreamingResponse(
+        event_source(),
+        media_type="text/event-stream",
+        headers=headers,
+    )
 
 
 if __name__ == "__main__":

@@ -2,9 +2,8 @@
 
 import { useState, useCallback, DragEvent, ChangeEvent } from "react";
 import { useWorkbenchStore, FormatType } from "@/store/useWorkbenchStore";
-import { useGenerateDataset } from "@/hooks/useGenerateDataset";
-import { GenerateResponse } from "@/app/api";
-import { FileText, Type, Upload, Check, Sparkles, Sliders, Layers, AlertCircle, Loader2 } from "lucide-react";
+import { useGenerateDatasetStream } from "@/hooks/useGenerateDatasetStream";
+import { FileText, Type, Upload, Check, Sparkles, Sliders, Layers, AlertCircle, Loader2, X } from "lucide-react";
 
 const formatExamples: Record<FormatType, string> = {
   alpaca: `{\n  "instruction": "...",\n  "input": "...",\n  "output": "..."\n}`,
@@ -14,11 +13,10 @@ const formatExamples: Record<FormatType, string> = {
 
 interface InputWorkbenchProps {
   onGenerateStart: () => void;
-  onGenerateSuccess: (data: GenerateResponse) => void;
-  onGenerateError: (errorMsg: string) => void;
+  stream: ReturnType<typeof useGenerateDatasetStream>;
 }
 
-export default function InputWorkbench({ onGenerateStart, onGenerateSuccess, onGenerateError }: InputWorkbenchProps) {
+export default function InputWorkbench({ onGenerateStart, stream }: InputWorkbenchProps) {
   const {
     inputMode,
     setInputMode,
@@ -33,7 +31,6 @@ export default function InputWorkbench({ onGenerateStart, onGenerateSuccess, onG
   } = useWorkbenchStore();
 
   const [dragActive, setDragActive] = useState(false);
-  const generateMutation = useGenerateDataset();
 
   const handleDrag = useCallback((e: DragEvent) => {
     e.preventDefault();
@@ -70,16 +67,15 @@ export default function InputWorkbench({ onGenerateStart, onGenerateSuccess, onG
   const handleGenerate = async () => {
     onGenerateStart();
     try {
-      const res = await generateMutation.mutateAsync({
+      await stream.mutateAsync({
         file,
         textInput,
         inputMode,
         formatType,
         numSamples,
       });
-      onGenerateSuccess(res);
-    } catch (err) {
-      onGenerateError(err instanceof Error ? err.message : "Dataset generation failed");
+    } catch {
+      // Error state is reflected in `stream.state` already; nothing to do here.
     }
   };
 
@@ -288,31 +284,43 @@ export default function InputWorkbench({ onGenerateStart, onGenerateSuccess, onG
           </div>
         </div>
 
-        {generateMutation.isError && (
+        {stream.isError && (
           <div className="flex items-center gap-2 p-m bg-muted border border-border rounded-xl text-error text-xs font-bold">
             <AlertCircle className="w-4 h-4 shrink-0" />
-            <span>{generateMutation.error?.message || "Failed to generate dataset"}</span>
+            <span>{stream.error?.message || "Failed to generate dataset"}</span>
           </div>
         )}
 
-        <button
-          type="button"
-          onClick={handleGenerate}
-          disabled={generateMutation.isPending || !isFormValid}
-          className="w-full h-high bg-primary hover:bg-primary-hover disabled:opacity-50 disabled:cursor-not-allowed text-white font-extrabold text-base rounded-xl transition-all shadow-md active:scale-[0.99] flex items-center justify-center gap-2"
-        >
-          {generateMutation.isPending ? (
-            <>
-              <Loader2 className="w-5 h-5 animate-spin" />
-              <span>Synthesizing Synthetic Dataset...</span>
-            </>
-          ) : (
-            <>
-              <Sparkles className="w-5 h-5" />
-              <span>Generate Dataset</span>
-            </>
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={handleGenerate}
+            disabled={stream.isPending || !isFormValid}
+            className="flex-1 h-high bg-primary hover:bg-primary-hover disabled:opacity-50 disabled:cursor-not-allowed text-white font-extrabold text-base rounded-xl transition-all shadow-md active:scale-[0.99] flex items-center justify-center gap-2"
+          >
+            {stream.isPending ? (
+              <>
+                <Loader2 className="w-5 h-5 animate-spin" />
+                <span>Streaming...</span>
+              </>
+            ) : (
+              <>
+                <Sparkles className="w-5 h-5" />
+                <span>Generate Dataset</span>
+              </>
+            )}
+          </button>
+          {stream.isPending && (
+            <button
+              type="button"
+              onClick={stream.abort}
+              className="h-high px-l bg-muted hover:bg-border text-foreground font-extrabold text-sm rounded-xl transition-all border border-border flex items-center gap-2"
+            >
+              <X className="w-4 h-4 text-error" />
+              Stop
+            </button>
           )}
-        </button>
+        </div>
       </div>
     </div>
   );
