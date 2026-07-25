@@ -17,6 +17,7 @@ interface WorkbenchState {
   activeStudioTab: StudioTab;
   isCommandPaletteOpen: boolean;
   isDarkMode: boolean;
+  isResearchModalOpen: boolean;
 
   setInputMode: (mode: InputMode) => void;
   setFormatType: (format: FormatType) => void;
@@ -30,6 +31,8 @@ interface WorkbenchState {
   toggleCommandPalette: () => void;
   setDarkMode: (dark: boolean) => void;
   toggleDarkMode: () => void;
+  setResearchModalOpen: (open: boolean) => void;
+  toggleResearchModal: () => void;
   resetInputs: () => void;
 }
 
@@ -44,6 +47,7 @@ export const useWorkbenchStore = create<WorkbenchState>((set) => ({
   activeStudioTab: "dataset",
   isCommandPaletteOpen: false,
   isDarkMode: false,
+  isResearchModalOpen: false,
 
   setInputMode: (mode) => set({ inputMode: mode }),
   setFormatType: (format) => set({ formatType: format }),
@@ -58,6 +62,9 @@ export const useWorkbenchStore = create<WorkbenchState>((set) => ({
     set((state) => ({ isCommandPaletteOpen: !state.isCommandPaletteOpen })),
   setDarkMode: (dark) => set({ isDarkMode: dark }),
   toggleDarkMode: () => set((state) => ({ isDarkMode: !state.isDarkMode })),
+  setResearchModalOpen: (open) => set({ isResearchModalOpen: open }),
+  toggleResearchModal: () =>
+    set((state) => ({ isResearchModalOpen: !state.isResearchModalOpen })),
   resetInputs: () =>
     set({
       file: null,

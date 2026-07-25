@@ -79,3 +79,19 @@ extra_attempts = 3
 # (QualityAgent) Max revise rounds per flagged sample before we accept
 # the latest revision (or drop the sample).
 max_revise_rounds = 2
+
+# ============================================================
+# Research agent tuning
+# The multi-agent research pipeline (planner / researcher / gap /
+# quality / writer) uses these knobs.
+# ============================================================
+[research]
+# How many research questions the planner produces (also caps total
+# web searches across plan + gap follow-ups).
+max_searches = 6
+# How many gap (follow-up) rounds to run after the first research pass.
+max_gap_rounds = 1
+# Snippets to fetch per web_search call.
+snippets_per_query = 3
+# Per-LLM-call timeout for the research agents, in seconds.
+llm_timeout = 600

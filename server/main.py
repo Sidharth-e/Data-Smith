@@ -18,6 +18,7 @@ from agent import DatasetAgent, QualityAgent
 from errors import GenerationError
 from formats import GenerateResponse
 from model_factory import ModelFactory
+from research import ResearchAgent
 from config import settings
 
 # Configure logging
@@ -92,6 +93,9 @@ agent = DatasetAgent(llm=ModelFactory(config=settings).create(), config=settings
 # first request that asks for quality mode, since it reuses the same model
 # but makes ~2-3x the LLM calls.
 quality_agent: Optional[QualityAgent] = None
+# Research agent (LangGraph planner/researcher/gap/quality/writer). Built
+# lazily on first /api/research-stream request.
+research_agent: Optional[ResearchAgent] = None
 
 
 def _get_agent(quality: bool) -> DatasetAgent:
@@ -105,6 +109,17 @@ def _get_agent(quality: bool) -> DatasetAgent:
             config=settings,
         )
     return quality_agent
+
+
+def _get_research_agent() -> ResearchAgent:
+    """Return the research agent (built on first use)."""
+    global research_agent
+    if research_agent is None:
+        research_agent = ResearchAgent(
+            llm=ModelFactory(config=settings).create(),
+            config=settings,
+        )
+    return research_agent
 
 
 @app.get("/")
@@ -347,6 +362,50 @@ def _build_sse_response(text: str, format_type: str, num_samples: int, quality: 
         "Cache-Control": "no-cache",
         "Connection": "keep-alive",
         "X-Accel-Buffering": "no",  # disable proxy buffering (nginx)
+    }
+    return StreamingResponse(
+        event_source(),
+        media_type="text/event-stream",
+        headers=headers,
+    )
+
+
+@app.post("/api/research-stream")
+async def research_topic_stream(topic: str = Form(...)):
+    """
+    Stream a multi-agent research run for a topic.
+
+    Returns an SSE stream of structured events as the LangGraph pipeline
+    (planner -> researcher -> gap -> quality -> writer) progresses:
+    start, agent_start, agent_message, plan, search, snippets,
+    gap_questions, quality_snippets, document_chunk, document_done,
+    complete, error.
+
+    The final `complete` event carries the synthesized markdown source
+    document, which the client can then feed back into
+    /api/generate-text-stream to produce fine-tune samples.
+    """
+    if not topic.strip():
+        raise HTTPException(status_code=400, detail="Topic is empty")
+    if len(topic) > 500:
+        raise HTTPException(status_code=400, detail="Topic is too long (max 500 chars)")
+
+    logger.info("Streaming research: topic=%r", topic[:200])
+
+    async def event_source():
+        try:
+            async for ev in _get_research_agent().run_stream(topic):
+                yield _sse(ev)
+        except GenerationError as exc:
+            yield _sse({"type": "error", "message": exc.user_message})
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.error("Research stream failed: %s\n%s", exc, traceback.format_exc())
+            yield _sse({"type": "error", "message": f"Unexpected error: {exc}"})
+
+    headers = {
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        "X-Accel-Buffering": "no",
     }
     return StreamingResponse(
         event_source(),

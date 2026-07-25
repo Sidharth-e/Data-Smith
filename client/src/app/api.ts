@@ -31,7 +31,109 @@ export async function generateDataset(
   return response.data;
 }
 
-// ---- Streaming ----
+// ---- Research Streaming ----
+
+export type ResearchEvent =
+  | { type: "start"; topic: string }
+  | { type: "agent_start"; agent: ResearchAgentName; detail?: string }
+  | { type: "agent_message"; agent: ResearchAgentName; message: string }
+  | { type: "plan"; questions: string[] }
+  | { type: "search"; query: string; results: ResearchSnippet[] }
+  | { type: "snippets"; count: number; snippets?: ResearchSnippet[] }
+  | { type: "gap_questions"; questions: string[] }
+  | { type: "quality_snippets"; count: number }
+  | { type: "document_chunk"; content: string }
+  | { type: "document_done"; document: string }
+  | { type: "complete"; document: string }
+  | { type: "error"; message: string };
+
+export type ResearchAgentName =
+  | "planner"
+  | "researcher"
+  | "gap"
+  | "quality"
+  | "writer";
+
+export interface ResearchSnippet {
+  title: string;
+  snippet: string;
+  url: string;
+}
+
+/**
+ * Stream a multi-agent research run as Server-Sent Events.
+ *
+ * Calls `onEvent` for every parsed event. Resolves with the final
+ * synthesized document on `complete`, or rejects on `error` / network
+ * failure.
+ */
+export async function researchTopicStream(
+  topic: string,
+  onEvent: (event: ResearchEvent) => void,
+  signal?: AbortSignal
+): Promise<string> {
+  const baseURL =
+    process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api";
+  const url = `${baseURL}/research-stream`;
+
+  const formData = new FormData();
+  formData.append("topic", topic);
+
+  const resp = await fetch(url, {
+    method: "POST",
+    body: formData,
+    signal,
+  });
+
+  if (!resp.ok || !resp.body) {
+    let detail = `HTTP ${resp.status}`;
+    try {
+      const err = await resp.json();
+      detail = err.detail || err.message || detail;
+    } catch {
+      /* ignore */
+    }
+    throw new Error(detail);
+  }
+
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let document = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    let sep: number;
+    while ((sep = buffer.indexOf("\n\n")) !== -1) {
+      const rawEvent = buffer.slice(0, sep);
+      buffer = buffer.slice(sep + 2);
+
+      const lines = rawEvent.split("\n");
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed.startsWith("data:")) continue;
+        const payload = trimmed.slice(5).trim();
+        if (!payload) continue;
+        try {
+          const event = JSON.parse(payload) as ResearchEvent;
+          if (event.type === "complete" || event.type === "document_done") {
+            document = event.document;
+          }
+          onEvent(event);
+        } catch {
+          // Ignore malformed chunks.
+        }
+      }
+    }
+  }
+
+  return document;
+}
+
+// ---- Dataset Streaming ----
 
 export type StreamEvent =
   | { type: "start"; format_type: string; num_samples: number; num_batches: number; batch_size: number }

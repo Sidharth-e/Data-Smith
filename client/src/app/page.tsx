@@ -1,16 +1,18 @@
 "use client";
 
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useCallback } from "react";
 import { useWorkbenchStore } from "@/store/useWorkbenchStore";
 import Navbar from "@/components/Navbar";
 import InputWorkbench from "@/components/InputWorkbench";
 import OutputStudio from "@/components/OutputStudio";
 import CommandPalette from "@/components/CommandPalette";
+import ResearchModal from "@/components/ResearchModal";
 import { Terminal } from "lucide-react";
 import { useGenerateDatasetStream } from "@/hooks/useGenerateDatasetStream";
 
 export default function Home() {
-  const { isDarkMode } = useWorkbenchStore();
+  const { isDarkMode, isResearchModalOpen, setResearchModalOpen, setTextInput, setInputMode } =
+    useWorkbenchStore();
   const stream = useGenerateDatasetStream();
 
   useEffect(() => {
@@ -54,6 +56,15 @@ export default function Home() {
     stream.reset();
   };
 
+  const handleResearchApprove = useCallback(
+    (document: string, topic: string) => {
+      const header = `# Researched topic: ${topic}\n\n`;
+      setTextInput(header + document);
+      setInputMode("text");
+    },
+    [setTextInput, setInputMode]
+  );
+
   return (
     <div className="min-h-screen bg-background text-foreground flex flex-col transition-colors duration-200">
       <Navbar />
@@ -88,6 +99,12 @@ export default function Home() {
       </footer>
 
       <CommandPalette />
+
+      <ResearchModal
+        open={isResearchModalOpen}
+        onClose={() => setResearchModalOpen(false)}
+        onApprove={handleResearchApprove}
+      />
     </div>
   );
 }

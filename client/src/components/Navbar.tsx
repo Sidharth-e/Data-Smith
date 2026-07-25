@@ -3,10 +3,11 @@
 import { useWorkbenchStore } from "@/store/useWorkbenchStore";
 import { useApiHealth } from "@/hooks/useGenerateDataset";
 import Logo from "@/components/Logo";
-import { Command, Moon, Sun, CheckCircle2, AlertCircle } from "lucide-react";
+import { Command, Moon, Sun, CheckCircle2, AlertCircle, Search } from "lucide-react";
 
 export default function Navbar() {
-  const { isDarkMode, toggleDarkMode, toggleCommandPalette } = useWorkbenchStore();
+  const { isDarkMode, toggleDarkMode, toggleCommandPalette, toggleResearchModal } =
+    useWorkbenchStore();
   const { data: health, isError } = useApiHealth();
 
   return (
@@ -48,6 +49,16 @@ export default function Navbar() {
               <span className="text-secondary font-bold">Connecting...</span>
             )}
           </div>
+
+          <button
+            type="button"
+            onClick={toggleResearchModal}
+            aria-label="Open Research modal"
+            className="flex items-center gap-2 px-m h-medium rounded-xl border border-border bg-card hover:bg-muted text-xs font-bold text-foreground transition-all shadow-2xs cursor-pointer"
+          >
+            <Search className="w-3.5 h-3.5 text-primary" />
+            <span className="hidden md:inline">Research</span>
+          </button>
 
           <button
             type="button"
