@@ -1,0 +1,41 @@
+# Data Smith - Project-level configuration
+# Edit this file to switch providers / models without touching code.
+# A local override named `config.local.toml` (gitignored) takes precedence
+# if present and is merged on top of this file.
+
+[app]
+name = "Data Smith API"
+version = "1.0.0"
+host = "${HOST:-0.0.0.0}"
+port = "${PORT:-8000}"
+reload = "${RELOAD:-true}"
+log_level = "${LOG_LEVEL:-INFO}"
+
+[cors]
+# Frontend origins allowed to call the API
+origins = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://localhost:3001",
+    "http://127.0.0.1:3001",
+]
+
+[llm]
+# Which provider to use: "ollama" or "gemini"
+provider = "ollama"
+# Sampling temperature applied to every provider
+temperature = 0.7
+# Max chars of source text fed into the prompt per request
+max_input_chars = 4000
+
+# ----- Ollama (local) -----
+[llm.ollama]
+model = "${OLLAMA_MODEL:-mistral:7b-instruct}"
+base_url = "${OLLAMA_BASE_URL:-http://localhost:11434}"
+
+# ----- Google Gemini -----
+[llm.gemini]
+model = "${GEMINI_MODEL:-gemini-1.5-flash}"
+# API key is read from the GEMINI_API_KEY env var (see .env.example).
+# Do NOT hardcode secrets here.
+api_key = "${GEMINI_API_KEY}"

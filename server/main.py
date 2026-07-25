@@ -14,32 +14,29 @@ import uvicorn
 
 from agent import DatasetAgent
 from formats import GenerateResponse
+from model_factory import ModelFactory
+from config import settings
 
 # Configure logging
 logging.basicConfig(
-    level=logging.INFO,
+    level=getattr(logging, str(settings.get("app", {}).get("log_level", "INFO")).upper(), logging.INFO),
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger("data_smith")
 
 
 # Initialize FastAPI app
+app_cfg = settings.get("app", {})
 app = FastAPI(
-    title="Data Smith API",
+    title=app_cfg.get("name", "Data Smith API"),
     description="Generate fine-tuning datasets from text files using LangChain and Ollama",
-    version="1.0.0"
+    version=app_cfg.get("version", "1.0.0")
 )
 
 # Configure CORS for frontend access
-# Allow all localhost ports so dev servers (3000, 3001, 5173, etc.) work
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-        "http://localhost:3001",
-        "http://127.0.0.1:3001",
-    ],
+    allow_origins=settings.get("cors", {}).get("origins", []),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -69,9 +66,8 @@ async def catch_errors_middleware(request: Request, call_next):
             },
         )
 
-# Initialize the dataset agent
-# You can change the model name here to match your Ollama installation
-agent = DatasetAgent(model_name="mistral:7b-instruct")
+# Initialize the dataset agent using the model configured in config.toml
+agent = DatasetAgent(llm=ModelFactory().create())
 
 
 @app.get("/")
@@ -90,7 +86,12 @@ async def root():
 @app.get("/api/health")
 async def health_check():
     """Health check endpoint."""
-    return {"status": "healthy", "model": "llama3.2"}
+    llm_cfg = settings.get("llm", {})
+    return {
+        "status": "healthy",
+        "provider": llm_cfg.get("provider"),
+        "model": llm_cfg.get(llm_cfg.get("provider", ""), {}).get("model"),
+    }
 
 
 @app.post("/api/generate", response_model=GenerateResponse)
@@ -234,9 +235,11 @@ async def generate_from_text(
 
 
 if __name__ == "__main__":
+    app_cfg = settings.get("app", {})
+    reload_val = str(app_cfg.get("reload", "true")).lower() in ("1", "true", "yes")
     uvicorn.run(
         "main:app",
-        host="0.0.0.0",
-        port=8000,
-        reload=True
+        host=str(app_cfg.get("host", "0.0.0.0")),
+        port=int(app_cfg.get("port", 8000)),
+        reload=reload_val,
     )

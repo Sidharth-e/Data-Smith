@@ -4,31 +4,30 @@ LangChain Agent for Dataset Generation using Ollama.
 
 import json
 import re
-from typing import List, Literal
-from langchain_ollama import ChatOllama
+from typing import List, Literal, Optional
+from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 
 from formats import AlpacaFormat, ChatFormat, ChatMessage, CompletionFormat
+from model_factory import ModelFactory
 
 
 class DatasetAgent:
     """
     LangChain agent that generates fine-tuning datasets from text input.
-    Uses Ollama for local LLM inference.
+    The LLM is supplied by `ModelFactory` based on `config.toml`.
     """
     
-    def __init__(self, model_name: str = "llama3.2"):
+    def __init__(self, llm: Optional[BaseChatModel] = None):
         """
-        Initialize the agent with an Ollama model.
-        
+        Initialize the agent with a chat model.
+
         Args:
-            model_name: Name of the Ollama model to use (default: llama3.2)
+            llm: Optional pre-built chat model. When None, one is created
+                 from the project config via `ModelFactory`.
         """
-        self.llm = ChatOllama(
-            model=model_name,
-            temperature=0.7,
-        )
+        self.llm = llm or ModelFactory().create()
         self.parser = StrOutputParser()
     
     def _extract_json_array(self, text: str) -> List[dict]:
