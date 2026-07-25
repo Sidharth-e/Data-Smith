@@ -85,20 +85,8 @@ export default function InputWorkbench({ onGenerateStart, stream }: InputWorkben
     (inputMode === "text" && textInput.trim().length > 0);
 
   return (
-    <div className="bg-card border border-border rounded-2xl p-6 shadow-xs flex flex-col justify-between min-h-[640px] space-y-6">
-      <div className="space-y-6">
-        <div className="flex items-center justify-between border-b border-border pb-4">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl bg-primary-light text-primary flex items-center justify-center font-bold">
-              <Sliders className="w-4 h-4" />
-            </div>
-            <div>
-              <h2 className="text-base font-extrabold text-foreground tracking-tight">Synthesis Workbench</h2>
-              <p className="text-xs text-secondary font-medium">Configure source input & model parameters</p>
-            </div>
-          </div>
-        </div>
-
+    <div className="bg-card border border-border rounded-2xl p-6 shadow-xs flex flex-col justify-between lg:h-[640px] w-full overflow-hidden">
+      <div className="space-y-4">
         <div className="space-y-3">
           <div className="flex items-center justify-between">
             <label className="text-xs font-extrabold uppercase tracking-wider text-secondary flex items-center gap-1.5">
@@ -138,7 +126,7 @@ export default function InputWorkbench({ onGenerateStart, stream }: InputWorkben
               onDragLeave={handleDrag}
               onDragOver={handleDrag}
               onDrop={handleDrop}
-              className={`relative border-2 border-dashed rounded-xl p-6 text-center transition-all cursor-pointer ${dragActive
+              className={`relative border-2 border-dashed rounded-xl p-4 text-center transition-all cursor-pointer h-44 flex flex-col items-center justify-center ${dragActive
                 ? "border-primary bg-primary-light"
                 : file
                   ? "border-success bg-muted/40"
@@ -153,7 +141,7 @@ export default function InputWorkbench({ onGenerateStart, stream }: InputWorkben
                 className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
               />
               {file ? (
-                <div className="flex items-center justify-between bg-card p-3.5 rounded-xl border border-border shadow-2xs">
+                <div className="flex items-center justify-between bg-card p-3.5 rounded-xl border border-border shadow-2xs w-full">
                   <div className="flex items-center gap-3 text-left overflow-hidden">
                     <div className="w-9 h-9 rounded-lg bg-success/10 text-success flex items-center justify-center shrink-0">
                       <Check className="w-5 h-5" />
@@ -177,7 +165,7 @@ export default function InputWorkbench({ onGenerateStart, stream }: InputWorkben
                   </button>
                 </div>
               ) : (
-                <div className="space-y-2 py-4">
+                <div className="space-y-2 py-2">
                   <div className="w-11 h-11 mx-auto rounded-xl bg-card border border-border flex items-center justify-center text-primary shadow-2xs">
                     <Upload className="w-5 h-5" />
                   </div>
@@ -198,7 +186,7 @@ export default function InputWorkbench({ onGenerateStart, stream }: InputWorkben
               onChange={(e) => setTextInput(e.target.value)}
               placeholder="Paste raw text, articles, or documentation here..."
               aria-label="Raw text content input"
-              className="w-full h-40 bg-card border border-border rounded-xl p-4 text-foreground text-xs font-medium placeholder-secondary resize-none focus:outline-none focus:border-primary transition-colors"
+              className="w-full h-44 bg-card border border-border rounded-xl p-4 text-foreground text-xs font-medium placeholder-secondary resize-none focus:outline-none focus:border-primary transition-colors overflow-y-auto"
             />
           )}
         </div>

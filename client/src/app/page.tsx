@@ -58,15 +58,15 @@ export default function Home() {
     <div className="min-h-screen bg-background text-foreground flex flex-col transition-colors duration-200">
       <Navbar />
 
-      <main className="max-w-[1600px] w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6 flex-1">
-        <div className="grid lg:grid-cols-12 gap-6 items-stretch">
-          <div className="lg:col-span-5 xl:col-span-4">
+      <main className="max-w-[1600px] w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 flex-1 flex flex-col">
+        <div className="grid lg:grid-cols-12 gap-6 flex-1">
+          <div className="lg:col-span-5 xl:col-span-4 flex flex-col">
             <InputWorkbench
               onGenerateStart={handleGenerateStart}
               stream={stream}
             />
           </div>
-          <div className="lg:col-span-7 xl:col-span-8">
+          <div className="lg:col-span-7 xl:col-span-8 flex flex-col">
             <OutputStudio
               result={result}
               loading={stream.isPending}

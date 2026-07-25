@@ -61,9 +61,9 @@ export default function OutputStudio({ result, loading, stream, onClearLogs }: O
   }, [result?.data]);
 
   return (
-    <div className="bg-card border border-border rounded-2xl p-6 shadow-xs flex flex-col justify-between min-h-[640px] space-y-6">
-      <div className="space-y-6 flex-1 flex flex-col">
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border pb-4">
+    <div className="bg-card border border-border rounded-2xl p-6 shadow-xs flex flex-col lg:h-[640px] w-full overflow-hidden">
+      <div className="flex-1 flex flex-col min-h-0 gap-4">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border pb-4 shrink-0">
           <div className="flex items-center gap-3">
             <div className="flex bg-muted p-1 rounded-xl border border-border">
               <button
@@ -176,7 +176,7 @@ export default function OutputStudio({ result, loading, stream, onClearLogs }: O
         </div>
 
         {stream.state.status === "streaming" && activeStudioTab === "dataset" && (
-          <div className="flex items-center justify-between p-m bg-primary-light border border-primary/30 rounded-xl text-xs font-bold text-primary">
+          <div className="flex items-center justify-between p-m bg-primary-light border border-primary/30 rounded-xl text-xs font-bold text-primary shrink-0">
             <div className="flex items-center gap-2">
               <Sparkles className="w-4 h-4 animate-spin" />
               <span>Synthesizing live LLM dataset ({stream.state.samples.length} samples generated so far)...</span>
@@ -192,7 +192,7 @@ export default function OutputStudio({ result, loading, stream, onClearLogs }: O
         )}
 
         {result?.success && result.data.length > 0 && activeStudioTab !== "stream" && (
-          <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center justify-between gap-3 shrink-0">
             <div className="relative flex-1">
               <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-secondary" />
               <input
@@ -209,19 +209,19 @@ export default function OutputStudio({ result, loading, stream, onClearLogs }: O
           </div>
         )}
 
-        <div className="flex-1 flex flex-col">
+        <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
           {activeStudioTab === "stream" && (
-            <div className="flex-1 min-h-[460px]">
+            <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
               <StreamPanel state={stream.state} onClearLogs={onClearLogs} />
             </div>
           )}
 
           {activeStudioTab === "split" && (
-            <div className="flex-1 flex flex-col gap-4">
-              <div className="h-[280px]">
+            <div className="flex-1 min-h-0 flex flex-col gap-3 overflow-hidden">
+              <div className="h-1/2 min-h-0 flex flex-col overflow-hidden">
                 <StreamPanel state={stream.state} onClearLogs={onClearLogs} />
               </div>
-              <div className="flex-1 min-h-[260px] overflow-auto rounded-xl border border-border bg-card p-m">
+              <div className="h-1/2 min-h-0 overflow-y-auto rounded-xl border border-border bg-card p-m">
                 {result?.success && result.data.length > 0 ? (
                   <pre className="text-foreground text-xs font-mono font-semibold whitespace-pre-wrap break-words">
                     {JSON.stringify(filteredData, null, 2)}
@@ -236,9 +236,9 @@ export default function OutputStudio({ result, loading, stream, onClearLogs }: O
           )}
 
           {activeStudioTab === "dataset" && (
-            <div className="flex-1 flex flex-col justify-center">
+            <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
               {loading && (!result || result.data.length === 0) ? (
-                <div className="border-2 border-dashed border-border rounded-xl p-xl flex flex-col items-center justify-center text-center space-y-3 min-h-[420px] bg-muted/40">
+                <div className="border-2 border-dashed border-border rounded-xl p-xl flex flex-col items-center justify-center text-center space-y-3 bg-muted/40 flex-1 min-h-0">
                   <div className="w-12 h-12 rounded-2xl bg-primary-light flex items-center justify-center text-primary animate-pulse">
                     <Sparkles className="w-6 h-6" />
                   </div>
@@ -250,7 +250,7 @@ export default function OutputStudio({ result, loading, stream, onClearLogs }: O
                   </p>
                 </div>
               ) : result?.success ? (
-                <div className="flex-1 max-h-[500px] overflow-auto rounded-xl border border-border bg-card p-m">
+                <div className="flex-1 min-h-0 overflow-y-auto rounded-xl border border-border bg-card p-m">
                   {viewMode === "json" && (
                     <pre className="text-foreground text-xs font-mono font-semibold whitespace-pre-wrap break-words">
                       {JSON.stringify(filteredData, null, 2)}
@@ -310,7 +310,7 @@ export default function OutputStudio({ result, loading, stream, onClearLogs }: O
                   )}
                 </div>
               ) : (
-                <div className="border-2 border-dashed border-border/80 rounded-2xl p-8 flex flex-col items-center justify-center text-center space-y-4 my-auto min-h-[480px] bg-muted/20">
+                <div className="border-2 border-dashed border-border/80 rounded-2xl p-8 flex flex-col items-center justify-center text-center space-y-4 flex-1 bg-muted/20 min-h-0">
                   <div className="w-14 h-14 rounded-2xl bg-card border border-border flex items-center justify-center text-primary shadow-xs">
                     <Code2 className="w-7 h-7" />
                   </div>
