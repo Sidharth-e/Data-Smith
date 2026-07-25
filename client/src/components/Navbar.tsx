@@ -2,7 +2,8 @@
 
 import { useWorkbenchStore } from "@/store/useWorkbenchStore";
 import { useApiHealth } from "@/hooks/useGenerateDataset";
-import { Command, Moon, Sun, Cpu, CheckCircle2, AlertCircle } from "lucide-react";
+import Logo from "@/components/Logo";
+import { Command, Moon, Sun, CheckCircle2, AlertCircle } from "lucide-react";
 
 export default function Navbar() {
   const { isDarkMode, toggleDarkMode, toggleCommandPalette } = useWorkbenchStore();
@@ -13,7 +14,7 @@ export default function Navbar() {
       <div className="max-w-7xl mx-auto px-l py-m flex items-center justify-between">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-xl bg-primary text-white flex items-center justify-center shadow-xs">
-            <Cpu className="w-5 h-5" />
+            <Logo size={24} className="text-white" />
           </div>
           <div>
             <div className="flex items-center gap-2">

@@ -5,6 +5,14 @@ import QueryProvider from "@/providers/QueryProvider";
 export const metadata: Metadata = {
   title: "Data Smith | LLM Fine-Tuning Dataset Generator Studio",
   description: "Synthesize high-quality Alpaca, Chat, and Completion datasets for model fine-tuning with LangChain and Ollama.",
+  icons: {
+    icon: [
+      { url: "/icon.svg", type: "image/svg+xml" },
+      { url: "/favicon.ico", sizes: "any" }
+    ],
+    shortcut: "/icon.svg",
+    apple: "/icon.svg",
+  },
 };
 
 export default function RootLayout({
