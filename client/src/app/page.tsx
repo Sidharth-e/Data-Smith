@@ -1,15 +1,9 @@
 "use client";
 
 import { useState, useCallback } from "react";
+import { generateDataset, GenerateResponse } from "./api";
 
 type FormatType = "alpaca" | "chat" | "completion";
-
-interface GenerateResponse {
-  success: boolean;
-  format_type: string;
-  data: Record<string, unknown>[];
-  message: string;
-}
 
 export default function Home() {
   const [file, setFile] = useState<File | null>(null);
@@ -20,6 +14,7 @@ export default function Home() {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<GenerateResponse | null>(null);
   const [dragActive, setDragActive] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   const handleDrag = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -61,23 +56,17 @@ export default function Home() {
       formData.append("format_type", formatType);
       formData.append("num_samples", numSamples.toString());
 
-      let endpoint = "http://localhost:8000/api/generate";
+      const isTextMode = inputMode === "text";
 
       if (inputMode === "file" && file) {
         formData.append("file", file);
       } else if (inputMode === "text" && textInput.trim()) {
         formData.append("text", textInput);
-        endpoint = "http://localhost:8000/api/generate-text";
       } else {
         throw new Error("Please provide input text or upload a file");
       }
 
-      const response = await fetch(endpoint, {
-        method: "POST",
-        body: formData,
-      });
-
-      const data: GenerateResponse = await response.json();
+      const data = await generateDataset(formData, isTextMode);
       setResult(data);
     } catch (error) {
       setResult({
@@ -106,37 +95,27 @@ export default function Home() {
     URL.revokeObjectURL(url);
   };
 
+  const handleCopy = () => {
+    if (!result?.data) return;
+    navigator.clipboard.writeText(JSON.stringify(result.data, null, 2));
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
   const formatExamples: Record<FormatType, string> = {
-    alpaca: `{
-  "instruction": "...",
-  "input": "...",
-  "output": "..."
-}`,
-    chat: `{
-  "messages": [
-    {"role": "system", "content": "..."},
-    {"role": "user", "content": "..."},
-    {"role": "assistant", "content": "..."}
-  ]
-}`,
-    completion: `{
-  "text": "..."
-}`,
+    alpaca: `{\n  "instruction": "...",\n  "input": "...",\n  "output": "..."\n}`,
+    chat: `{\n  "messages": [\n    {"role": "system", "content": "..."},\n    {"role": "user", "content": "..."},\n    {"role": "assistant", "content": "..."}\n  ]\n}`,
+    completion: `{\n  "text": "..."\n}`,
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900">
+    <div className="min-h-screen bg-background text-foreground flex flex-col">
       {/* Header */}
-      <header className="border-b border-white/10 backdrop-blur-xl bg-black/20">
-        <div className="max-w-6xl mx-auto px-6 py-4">
+      <header className="border-b border-border bg-card">
+        <div className="max-w-7xl mx-auto px-l py-m">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-violet-500 to-fuchsia-500 flex items-center justify-center">
-              <svg
-                className="w-6 h-6 text-white"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
+            <div className="w-10 h-10 rounded-xl bg-primary text-white flex items-center justify-center shadow-xs">
+              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path
                   strokeLinecap="round"
                   strokeLinejoin="round"
@@ -146,44 +125,83 @@ export default function Home() {
               </svg>
             </div>
             <div>
-              <h1 className="text-xl font-bold text-white">Data Smith</h1>
-              <p className="text-xs text-white/60">
-                Dataset Generator for Fine-Tuning
-              </p>
+              <h1 className="text-lg font-bold text-foreground tracking-tight">Data Smith</h1>
+              <p className="text-xs text-muted">Generate datasets for LLM fine-tuning</p>
             </div>
           </div>
         </div>
       </header>
 
-      <main className="max-w-6xl mx-auto px-6 py-8">
-        <div className="grid lg:grid-cols-2 gap-8">
-          {/* Left Panel - Input */}
-          <div className="space-y-6">
-            {/* Input Mode Toggle */}
-            <div className="bg-white/5 backdrop-blur-xl rounded-2xl border border-white/10 p-6">
-              <h2 className="text-lg font-semibold text-white mb-4">
-                Input Source
+      <main className="max-w-7xl mx-auto px-l py-l space-y-8 flex-1 w-full">
+        {/* Hero Section */}
+        <section className="bg-primary-light border border-primary/20 rounded-2xl p-l md:p-xl shadow-xs">
+          <div className="grid md:grid-cols-3 gap-6 items-center">
+            <div className="md:col-span-2 space-y-4">
+              <div className="inline-flex items-center gap-1.5 bg-card text-primary text-xs font-bold px-m py-s rounded-full border border-primary/20 uppercase tracking-wider shadow-2xs">
+                <span>✨</span>
+                <span>Fine-tuning ready in minutes</span>
+              </div>
+              <h2 className="text-3xl md:text-4xl font-extrabold text-foreground tracking-tight leading-tight">
+                Create fine-tuning datasets in minutes
               </h2>
-              <div className="flex gap-2 mb-6">
+              <p className="text-muted text-sm md:text-base leading-relaxed max-w-2xl">
+                Upload a text file or paste raw text, pick a training format, and let Data Smith generate ready-to-use JSON samples for your next model.
+              </p>
+            </div>
+
+            {/* Stat Card */}
+            <div className="bg-card border border-border rounded-2xl p-l shadow-sm space-y-4">
+              <div className="flex items-baseline gap-2">
+                <span className="text-3xl md:text-4xl font-extrabold text-foreground">73%</span>
+                <span className="text-xs text-muted font-medium">format match</span>
+              </div>
+              <div className="w-full bg-muted h-2 rounded-full overflow-hidden">
+                <div className="bg-primary h-full rounded-full w-[73%] transition-all duration-500" />
+              </div>
+              <div className="flex items-center gap-2 pt-1">
+                <span className="w-4 h-4 rounded-full bg-muted border border-border" />
+                <span className="w-4 h-4 rounded-full bg-primary" />
+                <span className="w-4 h-4 rounded-full bg-muted border border-border" />
+                <span className="w-4 h-4 rounded-full bg-primary/70" />
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {/* Main 2-Column Interface */}
+        <div className="grid lg:grid-cols-2 gap-8 items-start">
+          {/* Left Column: Controls & Input */}
+          <div className="space-y-6">
+            {/* Input Mode Container */}
+            <div className="bg-card border border-border rounded-2xl p-l space-y-4 shadow-xs">
+              <div className="flex gap-2 bg-muted p-s rounded-xl border border-border">
                 <button
+                  type="button"
                   onClick={() => setInputMode("file")}
-                  className={`flex-1 py-2.5 px-4 rounded-xl font-medium transition-all ${
+                  className={`flex-1 h-medium px-m rounded-lg text-sm font-semibold transition-all flex items-center justify-center gap-2 ${
                     inputMode === "file"
-                      ? "bg-violet-500 text-white shadow-lg shadow-violet-500/25"
-                      : "bg-white/5 text-white/60 hover:bg-white/10"
+                      ? "bg-card text-foreground shadow-2xs border border-border"
+                      : "text-muted hover:text-foreground"
                   }`}
                 >
-                  📄 File Upload
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                  </svg>
+                  File Upload
                 </button>
                 <button
+                  type="button"
                   onClick={() => setInputMode("text")}
-                  className={`flex-1 py-2.5 px-4 rounded-xl font-medium transition-all ${
+                  className={`flex-1 h-medium px-m rounded-lg text-sm font-semibold transition-all flex items-center justify-center gap-2 ${
                     inputMode === "text"
-                      ? "bg-violet-500 text-white shadow-lg shadow-violet-500/25"
-                      : "bg-white/5 text-white/60 hover:bg-white/10"
+                      ? "bg-card text-foreground shadow-2xs border border-border"
+                      : "text-muted hover:text-foreground"
                   }`}
                 >
-                  ✏️ Text Input
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                  </svg>
+                  Text Input
                 </button>
               </div>
 
@@ -193,12 +211,12 @@ export default function Home() {
                   onDragLeave={handleDrag}
                   onDragOver={handleDrag}
                   onDrop={handleDrop}
-                  className={`relative border-2 border-dashed rounded-xl p-8 text-center transition-all ${
+                  className={`relative border-2 border-dashed rounded-xl p-xl text-center transition-all cursor-pointer ${
                     dragActive
-                      ? "border-violet-500 bg-violet-500/10"
+                      ? "border-primary bg-primary-light"
                       : file
-                      ? "border-green-500/50 bg-green-500/5"
-                      : "border-white/20 hover:border-white/40"
+                      ? "border-success/50 bg-muted/50"
+                      : "border-border bg-muted/30 hover:border-primary/40"
                   }`}
                 >
                   <input
@@ -209,49 +227,25 @@ export default function Home() {
                   />
                   {file ? (
                     <div className="space-y-2">
-                      <div className="w-12 h-12 mx-auto rounded-full bg-green-500/20 flex items-center justify-center">
-                        <svg
-                          className="w-6 h-6 text-green-400"
-                          fill="none"
-                          stroke="currentColor"
-                          viewBox="0 0 24 24"
-                        >
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            strokeWidth={2}
-                            d="M5 13l4 4L19 7"
-                          />
+                      <div className="w-12 h-12 mx-auto rounded-xl bg-card border border-border flex items-center justify-center text-success shadow-2xs">
+                        <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
                         </svg>
                       </div>
-                      <p className="text-white font-medium">{file.name}</p>
-                      <p className="text-white/40 text-sm">
-                        {(file.size / 1024).toFixed(1)} KB
-                      </p>
+                      <p className="text-foreground font-semibold text-sm">{file.name}</p>
+                      <p className="text-muted text-xs">{(file.size / 1024).toFixed(1)} KB</p>
                     </div>
                   ) : (
-                    <div className="space-y-2">
-                      <div className="w-12 h-12 mx-auto rounded-full bg-white/10 flex items-center justify-center">
-                        <svg
-                          className="w-6 h-6 text-white/60"
-                          fill="none"
-                          stroke="currentColor"
-                          viewBox="0 0 24 24"
-                        >
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            strokeWidth={2}
-                            d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"
-                          />
+                    <div className="space-y-3">
+                      <div className="w-12 h-12 mx-auto rounded-xl bg-card border border-border flex items-center justify-center text-muted shadow-2xs">
+                        <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0l-4 4m4-4v12" />
                         </svg>
                       </div>
-                      <p className="text-white/80">
-                        Drop your .txt file here or click to browse
-                      </p>
-                      <p className="text-white/40 text-sm">
-                        Only .txt files are supported
-                      </p>
+                      <div>
+                        <p className="text-foreground font-semibold text-sm">Drop your .txt file here or click to browse</p>
+                        <p className="text-muted text-xs mt-1">Only .txt files are supported</p>
+                      </div>
                     </div>
                   )}
                 </div>
@@ -259,179 +253,188 @@ export default function Home() {
                 <textarea
                   value={textInput}
                   onChange={(e) => setTextInput(e.target.value)}
-                  placeholder="Paste your text content here..."
-                  className="w-full h-48 bg-black/30 border border-white/10 rounded-xl p-4 text-white placeholder-white/30 resize-none focus:outline-none focus:border-violet-500/50 focus:ring-2 focus:ring-violet-500/20"
+                  placeholder="Paste your raw text content here..."
+                  className="w-full h-44 bg-muted border border-border rounded-xl p-m text-foreground text-sm placeholder-muted resize-none focus:outline-none focus:border-primary transition-colors"
                 />
               )}
             </div>
 
-            {/* Format Selection */}
-            <div className="bg-white/5 backdrop-blur-xl rounded-2xl border border-white/10 p-6">
-              <h2 className="text-lg font-semibold text-white mb-4">
-                Output Format
-              </h2>
-              <div className="grid grid-cols-3 gap-3">
-                {(["alpaca", "chat", "completion"] as FormatType[]).map(
-                  (format) => (
-                    <button
-                      key={format}
-                      onClick={() => setFormatType(format)}
-                      className={`py-3 px-4 rounded-xl font-medium text-sm transition-all ${
-                        formatType === format
-                          ? "bg-gradient-to-r from-violet-500 to-fuchsia-500 text-white shadow-lg"
-                          : "bg-white/5 text-white/60 hover:bg-white/10"
-                      }`}
-                    >
-                      {format.charAt(0).toUpperCase() + format.slice(1)}
-                    </button>
-                  )
-                )}
+            {/* Step 2: Output Format */}
+            <div className="bg-card border border-border rounded-2xl p-l space-y-4 shadow-xs">
+              <div className="flex items-center gap-2">
+                <span className="w-6 h-6 rounded-full bg-primary text-white text-xs font-bold flex items-center justify-center">2</span>
+                <h3 className="text-base font-bold text-foreground">Output Format</h3>
               </div>
 
-              <div className="mt-4 p-4 bg-black/30 rounded-xl">
-                <p className="text-white/40 text-xs mb-2">Format preview:</p>
-                <pre className="text-white/80 text-xs overflow-x-auto">
+              <div className="grid grid-cols-3 gap-3">
+                {(["alpaca", "chat", "completion"] as FormatType[]).map((format) => (
+                  <button
+                    key={format}
+                    type="button"
+                    onClick={() => setFormatType(format)}
+                    className={`h-medium px-m rounded-xl text-sm font-semibold transition-all ${
+                      formatType === format
+                        ? "bg-card border-2 border-primary text-foreground shadow-2xs"
+                        : "bg-card border border-border text-muted hover:border-border/80 hover:text-foreground"
+                    }`}
+                  >
+                    {format.charAt(0).toUpperCase() + format.slice(1)}
+                  </button>
+                ))}
+              </div>
+
+              <div className="bg-muted border border-border rounded-xl p-m space-y-2">
+                <span className="text-muted text-xs font-bold uppercase tracking-wider block">Format Preview</span>
+                <pre className="text-foreground text-xs font-mono overflow-x-auto whitespace-pre">
                   {formatExamples[formatType]}
                 </pre>
               </div>
             </div>
 
-            {/* Settings & Generate */}
-            <div className="bg-white/5 backdrop-blur-xl rounded-2xl border border-white/10 p-6">
-              <div className="flex items-center justify-between mb-4">
-                <label className="text-white font-medium">
-                  Number of Samples
-                </label>
-                <div className="flex items-center gap-3">
+            {/* Step 3: Settings */}
+            <div className="bg-card border border-border rounded-2xl p-l space-y-5 shadow-xs">
+              <div className="flex items-center gap-2">
+                <span className="w-6 h-6 rounded-full bg-primary text-white text-xs font-bold flex items-center justify-center">3</span>
+                <h3 className="text-base font-bold text-foreground">Settings</h3>
+              </div>
+
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <label htmlFor="num-samples-input" className="text-sm font-medium text-foreground">Number of Samples</label>
                   <input
+                    id="num-samples-input"
+                    type="number"
+                    min="1"
+                    max="1000"
+                    value={numSamples}
+                    onChange={(e) => {
+                      const val = parseInt(e.target.value);
+                      setNumSamples(isNaN(val) ? 1 : Math.min(Math.max(val, 1), 1000));
+                    }}
+                    className="w-16 h-8 bg-muted border border-border rounded-lg text-center text-sm font-bold text-foreground focus:outline-none focus:border-primary"
+                  />
+                </div>
+
+                <div className="flex items-center gap-4">
+                  <input
+                    id="num-samples-slider"
                     type="range"
                     min="1"
-                    max="20"
-                    value={numSamples}
+                    max="100"
+                    value={numSamples > 100 ? 100 : numSamples}
                     onChange={(e) => setNumSamples(parseInt(e.target.value))}
-                    className="w-24 accent-violet-500"
+                    aria-label="Number of Samples"
+                    className="w-full accent-primary bg-muted h-2 rounded-lg cursor-pointer"
                   />
-                  <span className="text-white bg-white/10 px-3 py-1 rounded-lg min-w-[3rem] text-center">
-                    {numSamples}
-                  </span>
+                </div>
+
+                <div className="flex flex-wrap gap-2">
+                  {[5, 20, 50, 100, 500, 1000].map((n) => (
+                    <button
+                      key={n}
+                      type="button"
+                      onClick={() => setNumSamples(n)}
+                      className={`px-m py-s rounded-lg text-xs font-semibold transition-all ${
+                        numSamples === n
+                          ? "bg-primary text-white"
+                          : "bg-muted text-muted border border-border hover:text-foreground"
+                      }`}
+                    >
+                      {n}
+                    </button>
+                  ))}
                 </div>
               </div>
 
               <button
+                type="button"
                 onClick={handleGenerate}
                 disabled={
                   loading ||
                   (inputMode === "file" && !file) ||
                   (inputMode === "text" && !textInput.trim())
                 }
-                className="w-full py-4 rounded-xl font-semibold text-white bg-gradient-to-r from-violet-500 to-fuchsia-500 hover:from-violet-600 hover:to-fuchsia-600 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-lg shadow-violet-500/25 hover:shadow-violet-500/40"
+                className="w-full h-high bg-primary hover:bg-primary-hover disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold text-base rounded-xl transition-all shadow-md active:scale-[0.99] flex items-center justify-center gap-2"
               >
                 {loading ? (
-                  <span className="flex items-center justify-center gap-2">
-                    <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24">
-                      <circle
-                        className="opacity-25"
-                        cx="12"
-                        cy="12"
-                        r="10"
-                        stroke="currentColor"
-                        strokeWidth="4"
-                        fill="none"
-                      />
-                      <path
-                        className="opacity-75"
-                        fill="currentColor"
-                        d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-                      />
+                  <>
+                    <svg className="animate-spin h-5 w-5 text-white" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
                     </svg>
-                    Generating...
-                  </span>
+                    <span>Generating...</span>
+                  </>
                 ) : (
-                  "🚀 Generate Dataset"
+                  <>
+                    <span>✨</span>
+                    <span>Generate Dataset</span>
+                  </>
                 )}
               </button>
             </div>
           </div>
 
-          {/* Right Panel - Output */}
-          <div className="bg-white/5 backdrop-blur-xl rounded-2xl border border-white/10 p-6 h-fit">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-lg font-semibold text-white">Output</h2>
-              {result?.success && result.data.length > 0 && (
-                <button
-                  onClick={handleDownload}
-                  className="flex items-center gap-2 py-2 px-4 rounded-lg bg-green-500/20 text-green-400 hover:bg-green-500/30 transition-colors text-sm font-medium"
-                >
-                  <svg
-                    className="w-4 h-4"
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
-                    />
-                  </svg>
-                  Download JSON
-                </button>
-              )}
-            </div>
-
-            {result ? (
-              <div className="space-y-4">
-                {/* Status Badge */}
-                <div
-                  className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-sm ${
-                    result.success
-                      ? "bg-green-500/20 text-green-400"
-                      : "bg-red-500/20 text-red-400"
-                  }`}
-                >
-                  {result.success ? "✓" : "✕"} {result.message}
-                </div>
-
-                {/* Data Preview */}
-                {result.data.length > 0 && (
-                  <div className="bg-black/40 rounded-xl p-4 max-h-[500px] overflow-auto">
-                    <pre className="text-white/80 text-sm whitespace-pre-wrap break-words">
-                      {JSON.stringify(result.data, null, 2)}
-                    </pre>
+          {/* Right Column: Output Card */}
+          <div className="bg-card border border-border rounded-2xl p-l shadow-xs flex flex-col min-h-[500px] justify-between space-y-4">
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <h3 className="text-lg font-bold text-foreground">Output</h3>
+                {result?.success && result.data.length > 0 && (
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={handleCopy}
+                      className="h-small px-m rounded-lg border border-border bg-card text-foreground hover:bg-muted text-xs font-semibold flex items-center gap-1.5 transition-all"
+                    >
+                      {copied ? "✓ Copied" : "📋 Copy"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleDownload}
+                      className="h-small px-m rounded-lg border border-border bg-card text-foreground hover:bg-muted text-xs font-semibold flex items-center gap-1.5 transition-all shadow-2xs"
+                    >
+                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                      </svg>
+                      Download JSON
+                    </button>
                   </div>
                 )}
               </div>
-            ) : (
-              <div className="text-center py-16">
-                <div className="w-16 h-16 mx-auto rounded-full bg-white/5 flex items-center justify-center mb-4">
-                  <svg
-                    className="w-8 h-8 text-white/30"
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
-                    />
-                  </svg>
+
+              {result ? (
+                <div className="space-y-3">
+                  <div className={`inline-flex items-center gap-2 px-m py-s rounded-lg text-xs font-semibold ${
+                    result.success ? "bg-primary-light text-primary border border-primary/20" : "bg-muted text-foreground border border-border"
+                  }`}>
+                    <span>{result.success ? "✓" : "✕"}</span>
+                    <span>{result.message}</span>
+                  </div>
+
+                  {result.data.length > 0 && (
+                    <div className="bg-muted border border-border rounded-xl p-m max-h-[420px] overflow-auto">
+                      <pre className="text-foreground text-xs font-mono whitespace-pre-wrap break-words">
+                        {JSON.stringify(result.data, null, 2)}
+                      </pre>
+                    </div>
+                  )}
                 </div>
-                <p className="text-white/40">
-                  Upload a file and generate dataset to see results
-                </p>
-              </div>
-            )}
+              ) : (
+                <div className="border border-dashed border-border rounded-xl p-xl my-auto min-h-[360px] flex items-center justify-center text-center">
+                  <p className="text-muted text-sm font-medium">
+                    Results appear here after you generate.
+                  </p>
+                </div>
+              )}
+            </div>
           </div>
         </div>
       </main>
 
       {/* Footer */}
-      <footer className="border-t border-white/10 mt-12">
-        <div className="max-w-6xl mx-auto px-6 py-4 text-center">
-          <p className="text-white/40 text-sm">
+      <footer className="border-t border-border bg-card py-m mt-12">
+        <div className="max-w-7xl mx-auto px-l text-center">
+          <p className="text-muted text-xs font-medium">
             Powered by LangChain & Ollama • Built with Next.js
           </p>
         </div>

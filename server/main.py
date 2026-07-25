@@ -136,10 +136,10 @@ async def generate_dataset(
         )
     
     # Validate num_samples
-    if num_samples < 1 or num_samples > 50:
+    if num_samples < 1 or num_samples > 1000:
         raise HTTPException(
             status_code=400,
-            detail="num_samples must be between 1 and 50"
+            detail="num_samples must be between 1 and 1000"
         )
     
     try:
@@ -212,10 +212,10 @@ async def generate_from_text(
             detail="Text content is empty"
         )
     
-    if num_samples < 1 or num_samples > 50:
+    if num_samples < 1 or num_samples > 1000:
         raise HTTPException(
             status_code=400,
-            detail="num_samples must be between 1 and 50"
+            detail="num_samples must be between 1 and 1000"
         )
     
     try:

@@ -3,6 +3,8 @@ LangChain Agent for Dataset Generation using Ollama.
 """
 
 import json
+import logging
+import random
 import re
 from typing import List, Literal, Optional
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -12,6 +14,15 @@ from langchain_core.output_parsers import StrOutputParser
 from errors import GenerationError, map_llm_error
 from formats import AlpacaFormat, ChatFormat, ChatMessage, CompletionFormat
 from model_factory import ModelFactory
+
+logger = logging.getLogger("data_smith")
+
+# How many samples to ask the LLM for in a single call. Larger values tend to
+# truncate or produce lower-quality output; this is a sane ceiling per batch.
+BATCH_SIZE = 20
+
+# Cap on the source text fed to the model per call (characters).
+SOURCE_CHAR_LIMIT = 4000
 
 
 def _extract_first_balanced_array(text: str) -> str | None:
@@ -155,12 +166,12 @@ Return ONLY the JSON array:""")
         ])
         
         response = await self._run_chain(prompt, {
-            "text": text[:4000],  # Limit input size
+            "text": text[:SOURCE_CHAR_LIMIT],  # Limit input size
             "num_samples": num_samples
         })
-        
+
         results = self._extract_json_array(response)
-        
+
         # Validate and clean results
         validated = []
         for item in results[:num_samples]:
@@ -170,7 +181,7 @@ Return ONLY the JSON array:""")
                     "input": str(item.get("input", "")),
                     "output": str(item.get("output", ""))
                 })
-        
+
         return validated
     
     async def generate_chat(self, text: str, num_samples: int = 5) -> List[dict]:
@@ -214,12 +225,12 @@ Return ONLY the JSON array:""")
         ])
         
         response = await self._run_chain(prompt, {
-            "text": text[:4000],
+            "text": text[:SOURCE_CHAR_LIMIT],
             "num_samples": num_samples
         })
-        
+
         results = self._extract_json_array(response)
-        
+
         # Validate and clean results
         validated = []
         for item in results[:num_samples]:
@@ -272,20 +283,57 @@ Return ONLY the JSON array:""")
         ])
         
         response = await self._run_chain(prompt, {
-            "text": text[:4000],
+            "text": text[:SOURCE_CHAR_LIMIT],
             "num_samples": num_samples
         })
-        
+
         results = self._extract_json_array(response)
-        
+
         # Validate and clean results
         validated = []
         for item in results[:num_samples]:
             if isinstance(item, dict) and "text" in item:
                 validated.append({"text": str(item["text"])})
-        
+
         return validated
     
+    @staticmethod
+    def _dedupe_key(item: dict) -> str:
+        """Return a canonical key used to detect duplicate samples.
+
+        Comparison is intentionally coarse (stripped, lowercased) so that
+        near-identical LLM output counts as a duplicate.
+        """
+        if "messages" in item and isinstance(item["messages"], list):
+            return " ".join(
+                str(m.get("content", "")).strip().lower()
+                for m in item["messages"]
+                if isinstance(m, dict)
+            )
+        if "instruction" in item:
+            return "|".join(
+                str(item.get(k, "")).strip().lower() for k in ("instruction", "input", "output")
+            )
+        if "text" in item:
+            return str(item["text"]).strip().lower()
+        return json.dumps(item, sort_keys=True).lower()
+
+    def _window(self, text: str, index: int, total: int) -> str:
+        """Return a slice of the source text for batch `index` of `total`.
+
+        For docs longer than SOURCE_CHAR_LIMIT this slides a window across the
+        text so each batch sees a different region; for short docs it just
+        returns the whole text. A deterministic pseudo-random offset per batch
+        keeps batches from all starting at the same point.
+        """
+        if len(text) <= SOURCE_CHAR_LIMIT:
+            return text
+        # Deterministic but varied offset per batch.
+        rng = random.Random(index * 17 + 7)
+        max_start = len(text) - SOURCE_CHAR_LIMIT
+        start = rng.randint(0, max_start) if total > 1 else 0
+        return text[start:start + SOURCE_CHAR_LIMIT]
+
     async def generate(
         self,
         text: str,
@@ -293,21 +341,68 @@ Return ONLY the JSON array:""")
         num_samples: int = 5
     ) -> List[dict]:
         """
-        Generate dataset in the specified format.
-        
+        Generate a dataset in the specified format.
+
+        For large `num_samples`, generation is split into batches of
+        `BATCH_SIZE` to keep LLM output manageable and high quality. Batches
+        iterate until the requested count is reached (or a retry cap is hit),
+        accumulating results and removing duplicates.
+
         Args:
             text: Source text to generate dataset from
             format_type: Output format type
             num_samples: Number of samples to generate
-            
+
         Returns:
             List of formatted dictionaries
         """
-        if format_type == "alpaca":
-            return await self.generate_alpaca(text, num_samples)
-        elif format_type == "chat":
-            return await self.generate_chat(text, num_samples)
-        elif format_type == "completion":
-            return await self.generate_completion(text, num_samples)
-        else:
+        handler = {
+            "alpaca": self.generate_alpaca,
+            "chat": self.generate_chat,
+            "completion": self.generate_completion,
+        }.get(format_type)
+        if handler is None:
             raise ValueError(f"Unknown format type: {format_type}")
+
+        # Small request: single call, original behaviour.
+        if num_samples <= BATCH_SIZE:
+            return await handler(text, num_samples)
+
+        # Large request: batched accumulation with dedup.
+        results: List[dict] = []
+        seen: set[str] = set()
+
+        # Estimate number of batches; allow extra attempts to compensate for
+        # duplicates / under-generation.
+        num_batches = (num_samples + BATCH_SIZE - 1) // BATCH_SIZE
+        max_attempts = num_batches + 3  # retry slack
+        attempt = 0
+
+        while len(results) < num_samples and attempt < max_attempts:
+            remaining = num_samples - len(results)
+            batch_n = min(BATCH_SIZE, remaining)
+
+            # Pick a region of the source text for this batch.
+            window = self._window(text, attempt, max_attempts)
+
+            try:
+                batch = await handler(window, batch_n)
+            except GenerationError:
+                raise
+            except Exception as exc:
+                # A single bad batch shouldn't kill the whole run.
+                logger.warning("Batch %d failed: %s", attempt, exc)
+                attempt += 1
+                continue
+
+            for item in batch:
+                key = self._dedupe_key(item)
+                if not key or key in seen:
+                    continue
+                seen.add(key)
+                results.append(item)
+
+            attempt += 1
+
+        # Trim to exactly the requested count.
+        return results[:num_samples]
