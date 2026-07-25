@@ -9,8 +9,47 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 
+from errors import GenerationError, map_llm_error
 from formats import AlpacaFormat, ChatFormat, ChatMessage, CompletionFormat
 from model_factory import ModelFactory
+
+
+def _extract_first_balanced_array(text: str) -> str | None:
+    """Return the substring of the first balanced top-level '[...]' block.
+
+    Scans for the first '[' and tracks bracket depth (respecting string literals)
+    so a verbose LLM response containing multiple arrays only yields the first
+    complete one, instead of spanning from the first '[' to the last ']' (greedy).
+    Returns None if no balanced array is found.
+    """
+    start = text.find("[")
+    if start == -1:
+        return None
+
+    depth = 0
+    in_str = False
+    quote = ""
+    i = start
+    while i < len(text):
+        ch = text[i]
+        if in_str:
+            if ch == "\\":
+                i += 2  # skip escaped char
+                continue
+            if ch == quote:
+                in_str = False
+        else:
+            if ch in ('"', "'"):
+                in_str = True
+                quote = ch
+            elif ch == "[":
+                depth += 1
+            elif ch == "]":
+                depth -= 1
+                if depth == 0:
+                    return text[start:i + 1]
+        i += 1
+    return None
 
 
 class DatasetAgent:
@@ -31,26 +70,55 @@ class DatasetAgent:
         self.parser = StrOutputParser()
     
     def _extract_json_array(self, text: str) -> List[dict]:
-        """Extract JSON array from LLM response text."""
-        # Try to find JSON array in the response
-        json_match = re.search(r'\[[\s\S]*\]', text)
-        if json_match:
+        """Extract a JSON array from LLM response text.
+
+        Tries, in order:
+          1. The contents of a ```json ... ``` fenced block.
+          2. The first balanced top-level JSON array (non-greedy, brace-aware).
+          3. Individual JSON objects as a last resort.
+        """
+        # 1. Fenced code block (LLMs often wrap output in ```json ... ```)
+        fence = re.search(r"```(?:json)?\s*(\[[\s\S]*?\])\s*```", text)
+        if fence:
             try:
-                return json.loads(json_match.group())
+                parsed = json.loads(fence.group(1))
+                if isinstance(parsed, list):
+                    return parsed
             except json.JSONDecodeError:
                 pass
-        
-        # Try to parse individual JSON objects
+
+        # 2. First balanced top-level JSON array
+        array = _extract_first_balanced_array(text)
+        if array is not None:
+            try:
+                parsed = json.loads(array)
+                if isinstance(parsed, list):
+                    return parsed
+            except json.JSONDecodeError:
+                pass
+
+        # 3. Individual JSON objects
         objects = []
         for match in re.finditer(r'\{[^{}]*\}', text):
             try:
                 obj = json.loads(match.group())
-                objects.append(obj)
+                if isinstance(obj, dict):
+                    objects.append(obj)
             except json.JSONDecodeError:
                 continue
-        
+
         return objects
-    
+
+    async def _run_chain(self, prompt, prompt_vars: dict) -> str:
+        """Run a prompt|llm|parser chain, mapping LLM errors to GenerationError."""
+        chain = prompt | self.llm | self.parser
+        try:
+            return await chain.ainvoke(prompt_vars)
+        except GenerationError:
+            raise
+        except Exception as exc:
+            raise map_llm_error(exc) from exc
+
     async def generate_alpaca(self, text: str, num_samples: int = 5) -> List[dict]:
         """
         Generate Alpaca-style instruction-input-output pairs.
@@ -86,8 +154,7 @@ Example format:
 Return ONLY the JSON array:""")
         ])
         
-        chain = prompt | self.llm | self.parser
-        response = await chain.ainvoke({
+        response = await self._run_chain(prompt, {
             "text": text[:4000],  # Limit input size
             "num_samples": num_samples
         })
@@ -146,8 +213,7 @@ Example format:
 Return ONLY the JSON array:""")
         ])
         
-        chain = prompt | self.llm | self.parser
-        response = await chain.ainvoke({
+        response = await self._run_chain(prompt, {
             "text": text[:4000],
             "num_samples": num_samples
         })
@@ -205,8 +271,7 @@ Each text should be informative and self-contained.
 Return ONLY the JSON array:""")
         ])
         
-        chain = prompt | self.llm | self.parser
-        response = await chain.ainvoke({
+        response = await self._run_chain(prompt, {
             "text": text[:4000],
             "num_samples": num_samples
         })

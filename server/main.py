@@ -3,6 +3,7 @@ FastAPI server for Data Smith - Dataset Generation Tool.
 """
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -13,6 +14,7 @@ import traceback
 import uvicorn
 
 from agent import DatasetAgent
+from errors import GenerationError
 from formats import GenerateResponse
 from model_factory import ModelFactory
 from config import settings
@@ -59,12 +61,27 @@ async def catch_errors_middleware(request: Request, call_next):
         )
         return JSONResponse(
             status_code=500,
-            content={
-                "success": False,
-                "detail": "Internal server error",
-                "error": str(exc),
-            },
+            content={"success": False, "detail": "Internal server error"},
         )
+
+
+@app.exception_handler(GenerationError)
+async def generation_error_handler(request: Request, exc: GenerationError):
+    """Surface generation failures as a clean 502 with a friendly message."""
+    logger.warning("Generation error: %s | detail=%s", exc.user_message, exc.detail)
+    return JSONResponse(
+        status_code=502,
+        content={"success": False, "detail": exc.user_message},
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_error_handler(request: Request, exc: RequestValidationError):
+    """Return a flat, consistent validation error shape."""
+    return JSONResponse(
+        status_code=422,
+        content={"success": False, "detail": "Validation failed", "errors": exc.errors()},
+    )
 
 # Initialize the dataset agent using the model configured in config.toml
 agent = DatasetAgent(llm=ModelFactory().create())
@@ -165,14 +182,11 @@ async def generate_dataset(
         
     except HTTPException:
         raise
+    except GenerationError:
+        raise
     except Exception as e:
         logger.error("Dataset generation failed: %s\n%s", str(e), traceback.format_exc())
-        return GenerateResponse(
-            success=False,
-            format_type=format_type,
-            data=[],
-            message=f"Error generating dataset: {str(e)}"
-        )
+        raise GenerationError(f"Unexpected error: {e}") from e
 
 
 @app.post("/api/generate-text")
@@ -224,14 +238,13 @@ async def generate_from_text(
             message=f"Generated {len(data)} samples in {format_type} format"
         )
         
+    except HTTPException:
+        raise
+    except GenerationError:
+        raise
     except Exception as e:
         logger.error("Dataset generation failed: %s\n%s", str(e), traceback.format_exc())
-        return GenerateResponse(
-            success=False,
-            format_type=format_type,
-            data=[],
-            message=f"Error generating dataset: {str(e)}"
-        )
+        raise GenerationError(f"Unexpected error: {e}") from e
 
 
 if __name__ == "__main__":
