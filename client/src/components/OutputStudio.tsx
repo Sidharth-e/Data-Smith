@@ -1,18 +1,29 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useWorkbenchStore } from "@/store/useWorkbenchStore";
 import { GenerateResponse } from "@/app/api";
-import { Code2, Table, LayoutGrid, Search, Copy, Download, Check, Sparkles, Database } from "lucide-react";
+import { useGenerateDatasetStream } from "@/hooks/useGenerateDatasetStream";
+import StreamPanel from "@/components/StreamPanel";
+import { Code2, Table, LayoutGrid, Search, Copy, Download, Check, Sparkles, Database, Zap, Sliders } from "lucide-react";
 
 interface OutputStudioProps {
   result: GenerateResponse | null;
   loading: boolean;
+  stream: ReturnType<typeof useGenerateDatasetStream>;
+  onClearLogs: () => void;
 }
 
-export default function OutputStudio({ result, loading }: OutputStudioProps) {
-  const { viewMode, setViewMode, searchFilter, setSearchFilter } = useWorkbenchStore();
+export default function OutputStudio({ result, loading, stream, onClearLogs }: OutputStudioProps) {
+  const { viewMode, setViewMode, searchFilter, setSearchFilter, activeStudioTab, setActiveStudioTab } =
+    useWorkbenchStore();
   const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    if (stream.state.status === "streaming" && activeStudioTab === "dataset" && stream.state.samples.length === 0) {
+      setActiveStudioTab("stream");
+    }
+  }, [stream.state.status, stream.state.samples.length, activeStudioTab, setActiveStudioTab]);
 
   const filteredData = useMemo(() => {
     if (!result?.data) return [];
@@ -50,20 +61,59 @@ export default function OutputStudio({ result, loading }: OutputStudioProps) {
   }, [result?.data]);
 
   return (
-    <div className="bg-card border border-border rounded-2xl p-l shadow-xs flex flex-col min-h-[640px] justify-between space-y-4">
-      <div className="space-y-4 flex-1 flex flex-col">
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border pb-m">
-          <div className="flex items-center gap-2">
-            <Database className="w-5 h-5 text-primary" />
-            <h2 className="text-lg font-extrabold text-foreground">Dataset Studio</h2>
-            {result?.success && (
-              <span className="bg-primary-light text-primary text-xs font-extrabold px-m py-0.5 rounded-full border border-primary/30">
-                {result.data.length} Samples
-              </span>
-            )}
+    <div className="bg-card border border-border rounded-2xl p-6 shadow-xs flex flex-col justify-between min-h-[640px] space-y-6">
+      <div className="space-y-6 flex-1 flex flex-col">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border pb-4">
+          <div className="flex items-center gap-3">
+            <div className="flex bg-muted p-1 rounded-xl border border-border">
+              <button
+                type="button"
+                onClick={() => setActiveStudioTab("dataset")}
+                className={`flex items-center gap-1.5 px-m h-small rounded-lg text-xs font-extrabold transition-all ${
+                  activeStudioTab === "dataset"
+                    ? "bg-card text-foreground shadow-2xs border border-border"
+                    : "text-secondary hover:text-foreground"
+                }`}
+              >
+                <Database className="w-3.5 h-3.5 text-primary" />
+                <span>Dataset</span>
+                {result?.success && (
+                  <span className="bg-primary-light text-primary text-[10px] px-1.5 py-0.2 rounded-full font-mono">
+                    {result.data.length}
+                  </span>
+                )}
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveStudioTab("stream")}
+                className={`flex items-center gap-1.5 px-m h-small rounded-lg text-xs font-extrabold transition-all ${
+                  activeStudioTab === "stream"
+                    ? "bg-card text-foreground shadow-2xs border border-border"
+                    : "text-secondary hover:text-foreground"
+                }`}
+              >
+                <Zap className="w-3.5 h-3.5 text-primary" />
+                <span>Live Stream</span>
+                {stream.state.status === "streaming" && (
+                  <span className="w-2 h-2 rounded-full bg-primary animate-pulse ml-0.5" />
+                )}
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveStudioTab("split")}
+                className={`flex items-center gap-1.5 px-m h-small rounded-lg text-xs font-extrabold transition-all ${
+                  activeStudioTab === "split"
+                    ? "bg-card text-foreground shadow-2xs border border-border"
+                    : "text-secondary hover:text-foreground"
+                }`}
+              >
+                <Sliders className="w-3.5 h-3.5 text-primary" />
+                <span>Split View</span>
+              </button>
+            </div>
           </div>
 
-          {result?.success && result.data.length > 0 && (
+          {result?.success && result.data.length > 0 && activeStudioTab !== "stream" && (
             <div className="flex items-center gap-2">
               <div className="flex bg-muted p-0.5 rounded-lg border border-border">
                 <button
@@ -125,7 +175,23 @@ export default function OutputStudio({ result, loading }: OutputStudioProps) {
           )}
         </div>
 
-        {result?.success && result.data.length > 0 && (
+        {stream.state.status === "streaming" && activeStudioTab === "dataset" && (
+          <div className="flex items-center justify-between p-m bg-primary-light border border-primary/30 rounded-xl text-xs font-bold text-primary">
+            <div className="flex items-center gap-2">
+              <Sparkles className="w-4 h-4 animate-spin" />
+              <span>Synthesizing live LLM dataset ({stream.state.samples.length} samples generated so far)...</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setActiveStudioTab("stream")}
+              className="text-xs font-extrabold underline hover:text-primary-hover"
+            >
+              Watch Stream & Traces
+            </button>
+          </div>
+        )}
+
+        {result?.success && result.data.length > 0 && activeStudioTab !== "stream" && (
           <div className="flex items-center justify-between gap-3">
             <div className="relative flex-1">
               <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-secondary" />
@@ -143,92 +209,121 @@ export default function OutputStudio({ result, loading }: OutputStudioProps) {
           </div>
         )}
 
-        <div className="flex-1 flex flex-col justify-center">
-          {loading ? (
-            <div className="border-2 border-dashed border-border rounded-xl p-xl flex flex-col items-center justify-center text-center space-y-3 min-h-[420px] bg-muted/40">
-              <div className="w-12 h-12 rounded-2xl bg-primary-light flex items-center justify-center text-primary animate-pulse">
-                <Sparkles className="w-6 h-6" />
-              </div>
-              <p className="text-foreground font-extrabold text-sm">
-                Synthesizing dataset with LLM...
-              </p>
-              <p className="text-secondary font-bold text-xs max-w-xs">
-                Formatting and verifying JSON output samples.
-              </p>
+        <div className="flex-1 flex flex-col">
+          {activeStudioTab === "stream" && (
+            <div className="flex-1 min-h-[460px]">
+              <StreamPanel state={stream.state} onClearLogs={onClearLogs} />
             </div>
-          ) : result?.success ? (
-            <div className="flex-1 max-h-[500px] overflow-auto rounded-xl border border-border bg-card p-m">
-              {viewMode === "json" && (
-                <pre className="text-foreground text-xs font-mono font-semibold whitespace-pre-wrap break-words">
-                  {JSON.stringify(filteredData, null, 2)}
-                </pre>
-              )}
+          )}
 
-              {viewMode === "table" && (
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left text-xs text-foreground">
-                    <thead className="border-b border-border bg-muted text-secondary uppercase tracking-wider font-extrabold">
-                      <tr>
-                        <th className="p-s">#</th>
-                        {Object.keys(filteredData[0] || {}).map((key) => (
-                          <th key={key} className="p-s">
-                            {key}
-                          </th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-border">
-                      {filteredData.map((row, idx) => (
-                        <tr key={idx} className="hover:bg-muted/50">
-                          <td className="p-s text-secondary font-bold font-mono">{idx + 1}</td>
-                          {Object.keys(filteredData[0] || {}).map((key) => (
-                            <td key={key} className="p-s max-w-xs truncate font-mono text-[11px] font-semibold">
-                              {typeof row[key] === "object"
-                                ? JSON.stringify(row[key])
-                                : String(row[key])}
-                            </td>
+          {activeStudioTab === "split" && (
+            <div className="flex-1 flex flex-col gap-4">
+              <div className="h-[280px]">
+                <StreamPanel state={stream.state} onClearLogs={onClearLogs} />
+              </div>
+              <div className="flex-1 min-h-[260px] overflow-auto rounded-xl border border-border bg-card p-m">
+                {result?.success && result.data.length > 0 ? (
+                  <pre className="text-foreground text-xs font-mono font-semibold whitespace-pre-wrap break-words">
+                    {JSON.stringify(filteredData, null, 2)}
+                  </pre>
+                ) : (
+                  <div className="text-secondary text-xs font-bold text-center py-l">
+                    No samples generated yet.
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {activeStudioTab === "dataset" && (
+            <div className="flex-1 flex flex-col justify-center">
+              {loading && (!result || result.data.length === 0) ? (
+                <div className="border-2 border-dashed border-border rounded-xl p-xl flex flex-col items-center justify-center text-center space-y-3 min-h-[420px] bg-muted/40">
+                  <div className="w-12 h-12 rounded-2xl bg-primary-light flex items-center justify-center text-primary animate-pulse">
+                    <Sparkles className="w-6 h-6" />
+                  </div>
+                  <p className="text-foreground font-extrabold text-sm">
+                    Synthesizing dataset with LLM...
+                  </p>
+                  <p className="text-secondary font-bold text-xs max-w-xs">
+                    Formatting and verifying JSON output samples.
+                  </p>
+                </div>
+              ) : result?.success ? (
+                <div className="flex-1 max-h-[500px] overflow-auto rounded-xl border border-border bg-card p-m">
+                  {viewMode === "json" && (
+                    <pre className="text-foreground text-xs font-mono font-semibold whitespace-pre-wrap break-words">
+                      {JSON.stringify(filteredData, null, 2)}
+                    </pre>
+                  )}
+
+                  {viewMode === "table" && (
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left text-xs text-foreground">
+                        <thead className="border-b border-border bg-muted text-secondary uppercase tracking-wider font-extrabold">
+                          <tr>
+                            <th className="p-s">#</th>
+                            {Object.keys(filteredData[0] || {}).map((key) => (
+                              <th key={key} className="p-s">
+                                {key}
+                              </th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-border">
+                          {filteredData.map((row, idx) => (
+                            <tr key={idx} className="hover:bg-muted/50">
+                              <td className="p-s text-secondary font-bold font-mono">{idx + 1}</td>
+                              {Object.keys(filteredData[0] || {}).map((key) => (
+                                <td key={key} className="p-s max-w-xs truncate font-mono text-[11px] font-semibold">
+                                  {typeof row[key] === "object"
+                                    ? JSON.stringify(row[key])
+                                    : String(row[key])}
+                                </td>
+                              ))}
+                            </tr>
                           ))}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-
-              {viewMode === "cards" && (
-                <div className="grid gap-3">
-                  {filteredData.map((item, idx) => (
-                    <div
-                      key={idx}
-                      className="bg-card border border-border rounded-xl p-m space-y-2 shadow-2xs"
-                    >
-                      <div className="flex items-center justify-between text-xs font-extrabold text-secondary border-b border-border pb-1">
-                        <span>Sample #{idx + 1}</span>
-                        <span className="uppercase text-[10px] font-mono text-primary font-bold">
-                          {result.format_type}
-                        </span>
-                      </div>
-                      <pre className="text-foreground text-xs font-mono font-semibold whitespace-pre-wrap break-words">
-                        {JSON.stringify(item, null, 2)}
-                      </pre>
+                        </tbody>
+                      </table>
                     </div>
-                  ))}
+                  )}
+
+                  {viewMode === "cards" && (
+                    <div className="grid gap-3">
+                      {filteredData.map((item, idx) => (
+                        <div
+                          key={idx}
+                          className="bg-card border border-border rounded-xl p-m space-y-2 shadow-2xs"
+                        >
+                          <div className="flex items-center justify-between text-xs font-extrabold text-secondary border-b border-border pb-1">
+                            <span>Sample #{idx + 1}</span>
+                            <span className="uppercase text-[10px] font-mono text-primary font-bold">
+                              {result.format_type}
+                            </span>
+                          </div>
+                          <pre className="text-foreground text-xs font-mono font-semibold whitespace-pre-wrap break-words">
+                            {JSON.stringify(item, null, 2)}
+                          </pre>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="border-2 border-dashed border-border/80 rounded-2xl p-8 flex flex-col items-center justify-center text-center space-y-4 my-auto min-h-[480px] bg-muted/20">
+                  <div className="w-14 h-14 rounded-2xl bg-card border border-border flex items-center justify-center text-primary shadow-xs">
+                    <Code2 className="w-7 h-7" />
+                  </div>
+                  <div className="space-y-1">
+                    <p className="text-foreground font-black text-base tracking-tight">
+                      Ready to Synthesize
+                    </p>
+                    <p className="text-secondary font-semibold text-xs max-w-sm leading-relaxed">
+                      Upload text or paste content on the left, then click Generate Dataset to view live JSON samples here.
+                    </p>
+                  </div>
                 </div>
               )}
-            </div>
-          ) : (
-            <div className="border-2 border-dashed border-border rounded-xl p-xl flex flex-col items-center justify-center text-center space-y-3 my-auto min-h-[420px] bg-muted/30">
-              <div className="w-12 h-12 rounded-2xl bg-card border border-border flex items-center justify-center text-primary shadow-2xs">
-                <Code2 className="w-6 h-6" />
-              </div>
-              <div>
-                <p className="text-foreground font-black text-base">
-                  Ready to Synthesize
-                </p>
-                <p className="text-secondary font-bold text-xs mt-1.5 max-w-xs">
-                  Upload text or paste content on the left, then click Generate Dataset to view JSON samples here.
-                </p>
-              </div>
             </div>
           )}
         </div>

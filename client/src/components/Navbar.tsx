@@ -11,7 +11,7 @@ export default function Navbar() {
 
   return (
     <header className="border-b border-border bg-card sticky top-0 z-40 backdrop-blur-md shadow-2xs">
-      <div className="max-w-7xl mx-auto px-l py-m flex items-center justify-between">
+      <div className="max-w-[1600px] w-full mx-auto px-4 sm:px-6 lg:px-8 py-3 flex items-center justify-between gap-4">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-xl bg-primary text-white flex items-center justify-center shadow-xs">
             <Logo size={24} className="text-white" />
@@ -30,9 +30,8 @@ export default function Navbar() {
             </p>
           </div>
         </div>
-
         <div className="flex items-center gap-3">
-          <div className="hidden sm:flex items-center gap-2 px-m py-s bg-muted border border-border rounded-xl text-xs font-bold">
+          <div className="hidden sm:flex items-center gap-2 px-m py-1.5 bg-muted border border-border rounded-xl text-xs font-bold">
             {isError ? (
               <>
                 <AlertCircle className="w-3.5 h-3.5 text-error" />
@@ -54,7 +53,7 @@ export default function Navbar() {
             type="button"
             onClick={toggleCommandPalette}
             aria-label="Open Command Palette"
-            className="flex items-center gap-2 px-m h-medium rounded-xl border border-border bg-card hover:bg-muted text-xs font-bold text-foreground transition-all shadow-2xs"
+            className="flex items-center gap-2 px-m h-medium rounded-xl border border-border bg-card hover:bg-muted text-xs font-bold text-foreground transition-all shadow-2xs cursor-pointer"
           >
             <Command className="w-3.5 h-3.5 text-primary" />
             <span className="hidden md:inline">Command Palette</span>
@@ -67,7 +66,7 @@ export default function Navbar() {
             type="button"
             onClick={toggleDarkMode}
             aria-label="Toggle theme mode"
-            className="w-10 h-10 rounded-xl border border-border bg-card text-foreground hover:bg-muted flex items-center justify-center transition-all shadow-2xs"
+            className="w-10 h-10 rounded-xl border border-border bg-card text-foreground hover:bg-muted flex items-center justify-center transition-all shadow-2xs cursor-pointer"
           >
             {isDarkMode ? <Sun className="w-4 h-4 text-warning" /> : <Moon className="w-4 h-4 text-primary" />}
           </button>

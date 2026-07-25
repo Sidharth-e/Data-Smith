@@ -4,6 +4,8 @@ export type FormatType = "alpaca" | "chat" | "completion";
 export type ViewMode = "json" | "table" | "cards";
 export type InputMode = "file" | "text";
 
+export type StudioTab = "dataset" | "stream" | "split";
+
 interface WorkbenchState {
   inputMode: InputMode;
   formatType: FormatType;
@@ -12,6 +14,7 @@ interface WorkbenchState {
   textInput: string;
   viewMode: ViewMode;
   searchFilter: string;
+  activeStudioTab: StudioTab;
   isCommandPaletteOpen: boolean;
   isDarkMode: boolean;
 
@@ -22,6 +25,7 @@ interface WorkbenchState {
   setTextInput: (text: string) => void;
   setViewMode: (mode: ViewMode) => void;
   setSearchFilter: (query: string) => void;
+  setActiveStudioTab: (tab: StudioTab) => void;
   setCommandPaletteOpen: (open: boolean) => void;
   toggleCommandPalette: () => void;
   setDarkMode: (dark: boolean) => void;
@@ -37,6 +41,7 @@ export const useWorkbenchStore = create<WorkbenchState>((set) => ({
   textInput: "",
   viewMode: "json",
   searchFilter: "",
+  activeStudioTab: "dataset",
   isCommandPaletteOpen: false,
   isDarkMode: false,
 
@@ -47,6 +52,7 @@ export const useWorkbenchStore = create<WorkbenchState>((set) => ({
   setTextInput: (text) => set({ textInput: text }),
   setViewMode: (mode) => set({ viewMode: mode }),
   setSearchFilter: (query) => set({ searchFilter: query }),
+  setActiveStudioTab: (tab) => set({ activeStudioTab: tab }),
   setCommandPaletteOpen: (open) => set({ isCommandPaletteOpen: open }),
   toggleCommandPalette: () =>
     set((state) => ({ isCommandPaletteOpen: !state.isCommandPaletteOpen })),
