@@ -1,6 +1,6 @@
 import { create } from "zustand";
 
-export type FormatType = "alpaca" | "chat" | "completion";
+export type FormatType = "alpaca" | "chatml" | "sharegpt" | "dpo" | "completion";
 export type ViewMode = "json" | "table" | "cards";
 export type InputMode = "file" | "text";
 

@@ -1,11 +1,13 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { generateDataset, fetchHealth, GenerateResponse, HealthResponse } from "@/app/api";
 
+import { FormatType } from "@/store/useWorkbenchStore";
+
 export interface GenerateParams {
   file: File | null;
   textInput: string;
   inputMode: "file" | "text";
-  formatType: "alpaca" | "chat" | "completion";
+  formatType: FormatType;
   numSamples: number;
 }
 

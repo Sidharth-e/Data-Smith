@@ -2,7 +2,7 @@
 Pydantic models for dataset output formats.
 """
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import List, Literal
 
 
@@ -25,17 +25,17 @@ class AlpacaFormat(BaseModel):
 
 
 # ============================================
-# Chat Format (Conversational)
+# ChatML Format (Conversational)
 # ============================================
-class ChatMessage(BaseModel):
-    """Single message in a conversation."""
+class ChatMLMessage(BaseModel):
+    """Single message in a ChatML conversation."""
     role: Literal["system", "user", "assistant"]
     content: str
 
 
-class ChatFormat(BaseModel):
+class ChatMLFormat(BaseModel):
     """
-    Conversational chat format for fine-tuning.
+    Conversational chat format (ChatML) for fine-tuning.
     Example:
     {
         "messages": [
@@ -45,7 +45,47 @@ class ChatFormat(BaseModel):
         ]
     }
     """
-    messages: List[ChatMessage]
+    messages: List[ChatMLMessage]
+
+
+# ============================================
+# ShareGPT Format (Conversational)
+# ============================================
+class ShareGPTMessage(BaseModel):
+    """Single message in a ShareGPT conversation."""
+    from_: Literal["human", "gpt"] = Field(alias="from")
+    value: str
+
+class ShareGPTFormat(BaseModel):
+    """
+    Conversational format (ShareGPT) for fine-tuning.
+    Example:
+    {
+        "conversations": [
+            {"from": "human", "value": "What is X?"},
+            {"from": "gpt", "value": "X is..."}
+        ]
+    }
+    """
+    conversations: List[ShareGPTMessage]
+
+
+# ============================================
+# DPO Format (Preference Alignment)
+# ============================================
+class DPOFormat(BaseModel):
+    """
+    Preference alignment format (DPO) for fine-tuning.
+    Example:
+    {
+        "prompt": "Write a short poem about code.",
+        "chosen": "Lines of code write the future bold.",
+        "rejected": "Code is text that does stuff on computers."
+    }
+    """
+    prompt: str
+    chosen: str
+    rejected: str
 
 
 # ============================================
@@ -65,7 +105,7 @@ class CompletionFormat(BaseModel):
 # ============================================
 class GenerateRequest(BaseModel):
     """Request model for dataset generation."""
-    format_type: Literal["alpaca", "chat", "completion"]
+    format_type: Literal["alpaca", "chatml", "sharegpt", "dpo", "completion"]
     num_samples: int = 5
 
 

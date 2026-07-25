@@ -65,7 +65,7 @@ export default function CommandPalette() {
               Output Format
             </span>
             <div className="space-y-1">
-              {(["alpaca", "chat", "completion"] as FormatType[]).map((fmt) => (
+              {(["alpaca", "chatml", "sharegpt", "dpo", "completion"] as FormatType[]).map((fmt) => (
                 <button
                   key={fmt}
                   type="button"

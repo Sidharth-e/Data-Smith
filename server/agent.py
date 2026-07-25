@@ -16,7 +16,7 @@ from typing_extensions import TypedDict
 
 from config import load_config
 from errors import GenerationError, map_llm_error
-from formats import AlpacaFormat, ChatFormat, ChatMessage, CompletionFormat
+from formats import AlpacaFormat, ChatMLFormat, ChatMLMessage, CompletionFormat
 from model_factory import ModelFactory
 
 logger = logging.getLogger("data_smith")
@@ -283,7 +283,7 @@ Return ONLY the JSON array:""")
                 })
         return validated
     
-    async def generate_chat(self, text: str, num_samples: int = 5) -> List[dict]:
+    async def generate_chatml(self, text: str, num_samples: int = 5) -> List[dict]:
         """
         Generate conversational chat format data.
         
@@ -294,7 +294,7 @@ Return ONLY the JSON array:""")
         Returns:
             List of chat format dictionaries with messages array
         """
-        prompt = self._prompt_chat()
+        prompt = self._prompt_chatml()
         
         response = await self._run_chain(prompt, {
             "text": text[:self.source_char_limit],
@@ -302,15 +302,15 @@ Return ONLY the JSON array:""")
         })
 
         results = self._extract_json_array(response)
-        return self._validate_chat(results, num_samples)
+        return self._validate_chatml(results, num_samples)
     
-    def _prompt_chat(self) -> ChatPromptTemplate:
+    def _prompt_chatml(self) -> ChatPromptTemplate:
         return ChatPromptTemplate.from_messages([
             ("system", """You are a dataset generator for fine-tuning language models.
-Your task is to create conversational training data in chat format.
+Your task is to create conversational training data in ChatML format.
 
 IMPORTANT: Return ONLY a valid JSON array, no other text."""),
-            ("human", """Based on the following source text, generate {num_samples} conversations in chat format.
+            ("human", """Based on the following source text, generate {num_samples} conversations in ChatML format.
 
 Source Text:
 {text}
@@ -334,7 +334,7 @@ Example format:
 Return ONLY the JSON array:""")
         ])
     
-    def _validate_chat(self, results: List[dict], num_samples: int) -> List[dict]:
+    def _validate_chatml(self, results: List[dict], num_samples: int) -> List[dict]:
         validated = []
         for item in results[:num_samples]:
             if isinstance(item, dict) and "messages" in item:
@@ -347,6 +347,114 @@ Return ONLY the JSON array:""")
                         })
                 if messages:
                     validated.append({"messages": messages})
+        return validated
+    
+    async def generate_sharegpt(self, text: str, num_samples: int = 5) -> List[dict]:
+        """
+        Generate conversational data in ShareGPT format.
+        """
+        prompt = self._prompt_sharegpt()
+        
+        response = await self._run_chain(prompt, {
+            "text": text[:self.source_char_limit],
+            "num_samples": num_samples
+        })
+
+        results = self._extract_json_array(response)
+        return self._validate_sharegpt(results, num_samples)
+    
+    def _prompt_sharegpt(self) -> ChatPromptTemplate:
+        return ChatPromptTemplate.from_messages([
+            ("system", """You are a dataset generator for fine-tuning language models.
+Your task is to create conversational training data in ShareGPT format.
+
+IMPORTANT: Return ONLY a valid JSON array, no other text."""),
+            ("human", """Based on the following source text, generate {num_samples} conversations in ShareGPT format.
+
+Source Text:
+{text}
+
+Generate a JSON array with exactly {num_samples} objects. Each object must have a "conversations" array containing objects with "from" and "value" keys. "from" should be either "human" or "gpt".
+
+Example format:
+[
+  {{
+    "conversations": [
+      {{"from": "human", "value": "What is X?"}},
+      {{"from": "gpt", "value": "X is..."}}
+    ]
+  }}
+]
+
+Return ONLY the JSON array:""")
+        ])
+    
+    def _validate_sharegpt(self, results: List[dict], num_samples: int) -> List[dict]:
+        validated = []
+        for item in results[:num_samples]:
+            if isinstance(item, dict) and "conversations" in item:
+                conversations = []
+                for msg in item["conversations"]:
+                    if isinstance(msg, dict) and "from" in msg and "value" in msg:
+                        conversations.append({
+                            "from": msg["from"],
+                            "value": str(msg["value"])
+                        })
+                if conversations:
+                    validated.append({"conversations": conversations})
+        return validated
+    
+    async def generate_dpo(self, text: str, num_samples: int = 5) -> List[dict]:
+        """
+        Generate preference alignment data in DPO format.
+        """
+        prompt = self._prompt_dpo()
+        
+        response = await self._run_chain(prompt, {
+            "text": text[:self.source_char_limit],
+            "num_samples": num_samples
+        })
+
+        results = self._extract_json_array(response)
+        return self._validate_dpo(results, num_samples)
+    
+    def _prompt_dpo(self) -> ChatPromptTemplate:
+        return ChatPromptTemplate.from_messages([
+            ("system", """You are a dataset generator for fine-tuning language models.
+Your task is to create preference alignment training data in DPO format.
+
+IMPORTANT: Return ONLY a valid JSON array, no other text."""),
+            ("human", """Based on the following source text, generate {num_samples} preference pairs in DPO format.
+
+Source Text:
+{text}
+
+Generate a JSON array with exactly {num_samples} objects. Each object must have:
+- "prompt": The instruction or question based on the text
+- "chosen": A high-quality correct response
+- "rejected": A poor-quality or incorrect response
+
+Example format:
+[
+  {{
+    "prompt": "Explain X",
+    "chosen": "X is an important concept that...",
+    "rejected": "X is just some stuff."
+  }}
+]
+
+Return ONLY the JSON array:""")
+        ])
+    
+    def _validate_dpo(self, results: List[dict], num_samples: int) -> List[dict]:
+        validated = []
+        for item in results[:num_samples]:
+            if isinstance(item, dict) and "prompt" in item and "chosen" in item and "rejected" in item:
+                validated.append({
+                    "prompt": str(item["prompt"]),
+                    "chosen": str(item["chosen"]),
+                    "rejected": str(item["rejected"])
+                })
         return validated
     
     async def generate_completion(self, text: str, num_samples: int = 5) -> List[dict]:
@@ -415,9 +523,19 @@ Return ONLY the JSON array:""")
                 for m in item["messages"]
                 if isinstance(m, dict)
             )
+        if "conversations" in item and isinstance(item["conversations"], list):
+            return " ".join(
+                str(m.get("value", "")).strip().lower()
+                for m in item["conversations"]
+                if isinstance(m, dict)
+            )
         if "instruction" in item:
             return "|".join(
                 str(item.get(k, "")).strip().lower() for k in ("instruction", "input", "output")
+            )
+        if "prompt" in item and "chosen" in item:
+            return "|".join(
+                str(item.get(k, "")).strip().lower() for k in ("prompt", "chosen", "rejected")
             )
         if "text" in item:
             return str(item["text"]).strip().lower()
@@ -442,7 +560,7 @@ Return ONLY the JSON array:""")
     async def generate(
         self,
         text: str,
-        format_type: Literal["alpaca", "chat", "completion"],
+        format_type: Literal["alpaca", "chatml", "sharegpt", "dpo", "completion"],
         num_samples: int = 5
     ) -> List[dict]:
         """
@@ -463,7 +581,9 @@ Return ONLY the JSON array:""")
         """
         handler = {
             "alpaca": self.generate_alpaca,
-            "chat": self.generate_chat,
+            "chatml": self.generate_chatml,
+            "sharegpt": self.generate_sharegpt,
+            "dpo": self.generate_dpo,
             "completion": self.generate_completion,
         }.get(format_type)
         if handler is None:
@@ -522,21 +642,25 @@ Return ONLY the JSON array:""")
     def _validator_for(self, format_type: str):
         return {
             "alpaca": self._validate_alpaca,
-            "chat": self._validate_chat,
+            "chatml": self._validate_chatml,
+            "sharegpt": self._validate_sharegpt,
+            "dpo": self._validate_dpo,
             "completion": self._validate_completion,
         }[format_type]
 
     def _prompt_for(self, format_type: str) -> ChatPromptTemplate:
         return {
             "alpaca": self._prompt_alpaca,
-            "chat": self._prompt_chat,
+            "chatml": self._prompt_chatml,
+            "sharegpt": self._prompt_sharegpt,
+            "dpo": self._prompt_dpo,
             "completion": self._prompt_completion,
         }[format_type]()
 
     async def generate_stream(
         self,
         text: str,
-        format_type: Literal["alpaca", "chat", "completion"],
+        format_type: Literal["alpaca", "chatml", "sharegpt", "dpo", "completion"],
         num_samples: int = 5,
     ) -> AsyncIterator[Dict[str, Any]]:
         """
@@ -992,13 +1116,15 @@ Return the revised sample JSON:"""),
     async def generate(
         self,
         text: str,
-        format_type: Literal["alpaca", "chat", "completion"],
+        format_type: Literal["alpaca", "chatml", "sharegpt", "dpo", "completion"],
         num_samples: int = 5,
     ) -> List[dict]:
         """High-accuracy generate (non-streaming)."""
         handler = {
             "alpaca": self.generate_alpaca,
-            "chat": self.generate_chat,
+            "chatml": self.generate_chatml,
+            "sharegpt": self.generate_sharegpt,
+            "dpo": self.generate_dpo,
             "completion": self.generate_completion,
         }.get(format_type)
         if handler is None:
@@ -1051,7 +1177,7 @@ Return the revised sample JSON:"""),
     async def generate_stream(
         self,
         text: str,
-        format_type: Literal["alpaca", "chat", "completion"],
+        format_type: Literal["alpaca", "chatml", "sharegpt", "dpo", "completion"],
         num_samples: int = 5,
     ) -> AsyncIterator[Dict[str, Any]]:
         """High-accuracy streaming generate.
@@ -1064,7 +1190,9 @@ Return the revised sample JSON:"""),
         """
         handler = {
             "alpaca": self.generate_alpaca,
-            "chat": self.generate_chat,
+            "chatml": self.generate_chatml,
+            "sharegpt": self.generate_sharegpt,
+            "dpo": self.generate_dpo,
             "completion": self.generate_completion,
         }.get(format_type)
         if handler is None:

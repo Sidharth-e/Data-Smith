@@ -149,7 +149,7 @@ async def health_check():
 @app.post("/api/generate", response_model=GenerateResponse)
 async def generate_dataset(
     file: UploadFile = File(...),
-    format_type: Literal["alpaca", "chat", "completion"] = Form(...),
+    format_type: Literal["alpaca", "chatml", "sharegpt", "dpo", "completion"] = Form(...),
     num_samples: int = Form(default=5),
     quality: bool = Form(default=False),
 ):
@@ -158,7 +158,7 @@ async def generate_dataset(
     
     Args:
         file: Text file to process (.txt)
-        format_type: Output format - 'alpaca', 'chat', or 'completion'
+        format_type: Output format - 'alpaca', 'chatml', 'sharegpt', 'dpo', or 'completion'
         num_samples: Number of samples to generate (default: 5)
         
     Returns:
@@ -228,7 +228,7 @@ async def generate_dataset(
 @app.post("/api/generate-text")
 async def generate_from_text(
     text: str = Form(...),
-    format_type: Literal["alpaca", "chat", "completion"] = Form(...),
+    format_type: Literal["alpaca", "chatml", "sharegpt", "dpo", "completion"] = Form(...),
     num_samples: int = Form(default=5),
     quality: bool = Form(default=False),
 ):
@@ -237,7 +237,7 @@ async def generate_from_text(
     
     Args:
         text: Raw text content to process
-        format_type: Output format - 'alpaca', 'chat', or 'completion'
+        format_type: Output format - 'alpaca', 'chatml', 'sharegpt', 'dpo', or 'completion'
         num_samples: Number of samples to generate (default: 5)
         
     Returns:
@@ -292,7 +292,7 @@ def _sse(event: dict) -> str:
 @app.post("/api/generate-stream")
 async def generate_dataset_stream(
     file: UploadFile = File(...),
-    format_type: Literal["alpaca", "chat", "completion"] = Form(...),
+    format_type: Literal["alpaca", "chatml", "sharegpt", "dpo", "completion"] = Form(...),
     num_samples: int = Form(default=5),
     quality: bool = Form(default=False),
 ):
@@ -325,7 +325,7 @@ async def generate_dataset_stream(
 @app.post("/api/generate-text-stream")
 async def generate_from_text_stream(
     text: str = Form(...),
-    format_type: Literal["alpaca", "chat", "completion"] = Form(...),
+    format_type: Literal["alpaca", "chatml", "sharegpt", "dpo", "completion"] = Form(...),
     num_samples: int = Form(default=5),
     quality: bool = Form(default=False),
 ):

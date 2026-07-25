@@ -5,6 +5,7 @@ import {
   generateDatasetStream,
   StreamEvent,
 } from "@/app/api";
+import { FormatType } from "@/store/useWorkbenchStore";
 
 export interface BatchState {
   index: number;
@@ -49,11 +50,12 @@ const initialState: StreamState = {
   errorMessage: null,
 };
 
+
 export interface GenerateStreamParams {
   file: File | null;
   textInput: string;
   inputMode: "file" | "text";
-  formatType: "alpaca" | "chat" | "completion";
+  formatType: FormatType;
   numSamples: number;
 }
 

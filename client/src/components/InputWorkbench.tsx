@@ -7,7 +7,9 @@ import { FileText, Type, Upload, Check, Sparkles, Sliders, Layers, AlertCircle, 
 
 const formatExamples: Record<FormatType, string> = {
   alpaca: `{\n  "instruction": "...",\n  "input": "...",\n  "output": "..."\n}`,
-  chat: `{\n  "messages": [\n    {"role": "system", "content": "..."},\n    {"role": "user", "content": "..."},\n    {"role": "assistant", "content": "..."}\n  ]\n}`,
+  chatml: `{\n  "messages": [\n    {"role": "system", "content": "..."},\n    {"role": "user", "content": "..."},\n    {"role": "assistant", "content": "..."}\n  ]\n}`,
+  sharegpt: `{\n  "conversations": [\n    {"from": "human", "value": "..."},\n    {"from": "gpt", "value": "..."}\n  ]\n}`,
+  dpo: `{\n  "prompt": "...",\n  "chosen": "...",\n  "rejected": "..."\n}`,
   completion: `{\n  "text": "..."\n}`,
 };
 
@@ -208,18 +210,23 @@ export default function InputWorkbench({ onGenerateStart, stream }: InputWorkben
             </button>
           </div>
 
-          <div className="grid grid-cols-3 gap-2.5">
-            {(["alpaca", "chat", "completion"] as FormatType[]).map((format) => (
+          <div className="flex flex-wrap gap-2.5">
+            {(["alpaca", "chatml", "sharegpt", "dpo", "completion"] as FormatType[]).map((format) => (
               <button
                 key={format}
                 type="button"
                 onClick={() => setFormatType(format)}
-                className={`h-10 px-3 rounded-xl text-xs font-extrabold transition-all border cursor-pointer ${formatType === format
+                className={`h-10 px-3 flex-1 rounded-xl text-xs font-extrabold transition-all border cursor-pointer ${formatType === format
                   ? "bg-primary text-white border-primary shadow-2xs"
                   : "bg-card border-border text-secondary hover:border-primary/50 hover:text-foreground"
                   }`}
               >
-                <span className="whitespace-nowrap">{format.charAt(0).toUpperCase() + format.slice(1)}</span>
+                <span className="whitespace-nowrap">
+                  {format === "chatml" ? "ChatML" : 
+                   format === "sharegpt" ? "ShareGPT" : 
+                   format === "dpo" ? "DPO" : 
+                   format.charAt(0).toUpperCase() + format.slice(1)}
+                </span>
               </button>
             ))}
           </div>
