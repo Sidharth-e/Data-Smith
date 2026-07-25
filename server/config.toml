@@ -21,7 +21,7 @@ origins = [
 ]
 
 [llm]
-# Which provider to use: "ollama" or "gemini"
+# Which provider to use: "ollama" (local), "ollama_cloud", or "gemini"
 provider = "ollama"
 # Sampling temperature applied to every provider
 temperature = 0.7
@@ -32,6 +32,14 @@ max_input_chars = 4000
 [llm.ollama]
 model = "${OLLAMA_MODEL:-mistral:7b-instruct}"
 base_url = "${OLLAMA_BASE_URL:-http://localhost:11434}"
+
+# ----- Ollama Cloud -----
+# Ollama's hosted endpoint. base_url should be the host root
+# (ChatOllama appends /api/chat itself), e.g. https://ollama.com
+[llm.ollama_cloud]
+model = "${OLLAMA_CLOUD_MODEL:-mistral:7b-instruct}"
+base_url = "${OLLAMA_CLOUD_BASE_URL:-https://ollama.com}"
+api_key = "${OLLAMA_CLOUD_API_KEY}"
 
 # ----- Google Gemini -----
 [llm.gemini]

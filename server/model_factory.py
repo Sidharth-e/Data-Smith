@@ -19,7 +19,7 @@ from config import load_config
 class ModelFactory:
     """Builds a `BaseChatModel` based on the project configuration."""
 
-    SUPPORTED_PROVIDERS = ("ollama", "gemini")
+    SUPPORTED_PROVIDERS = ("ollama", "ollama_cloud", "gemini")
 
     def __init__(self, config: dict[str, Any] | None = None):
         self.config = config or load_config()
@@ -31,6 +31,8 @@ class ModelFactory:
 
         if provider == "ollama":
             return self._build_ollama(llm_cfg, temperature)
+        if provider == "ollama_cloud":
+            return self._build_ollama_cloud(llm_cfg, temperature)
         if provider == "gemini":
             return self._build_gemini(llm_cfg, temperature)
 
@@ -47,6 +49,33 @@ class ModelFactory:
             model=ollama_cfg.get("model", "llama3.2"),
             temperature=temperature,
             base_url=ollama_cfg.get("base_url", "http://localhost:11434"),
+        )
+
+    def _build_ollama_cloud(self, llm_cfg: dict[str, Any], temperature: float) -> BaseChatModel:
+        from langchain_ollama import ChatOllama
+
+        cloud_cfg = llm_cfg.get("ollama_cloud", {})
+        base_url = cloud_cfg.get("base_url", "https://ollama.com")
+        # ChatOllama appends /api/chat itself; strip any trailing /api* or /
+        # so a user-supplied "https://ollama.com/api" still works.
+        base_url = base_url.rstrip("/")
+        if base_url.endswith("/api"):
+            base_url = base_url[: -len("/api")]
+
+        api_key = cloud_cfg.get("api_key") or os.getenv("OLLAMA_CLOUD_API_KEY")
+        if not api_key:
+            raise ValueError(
+                "Ollama Cloud API key not provided. Set OLLAMA_CLOUD_API_KEY env "
+                "var or [llm.ollama_cloud].api_key in config.toml."
+            )
+
+        return ChatOllama(
+            model=cloud_cfg.get("model", "mistral:7b-instruct"),
+            temperature=temperature,
+            base_url=base_url,
+            # langchain_ollama forwards extra kwargs to the underlying client;
+            # the Ollama SDK picks up auth headers via the `headers` kwarg.
+            client_kwargs={"headers": {"Authorization": f"Bearer {api_key}"}},
         )
 
     def _build_gemini(self, llm_cfg: dict[str, Any], temperature: float) -> BaseChatModel:
