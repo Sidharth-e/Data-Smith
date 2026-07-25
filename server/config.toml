@@ -25,8 +25,6 @@ origins = [
 provider = "ollama_cloud"
 # Sampling temperature applied to every provider
 temperature = 0.7
-# Max chars of source text fed into the prompt per request
-max_input_chars = 4000
 
 # ----- Ollama (local) -----
 [llm.ollama]
@@ -52,3 +50,32 @@ model = "${GEMINI_MODEL:-gemini-1.5-flash}"
 # Do NOT hardcode secrets here.
 api_key = "${GEMINI_API_KEY}"
 timeout = "${GEMINI_TIMEOUT:-600}"
+
+# ============================================================
+# Generation tuning
+# All dataset-generation knobs live here so code changes are
+# not required to tune throughput / quality / latency.
+# ============================================================
+[generation]
+# How many samples to ask the LLM for in a single call. Smaller batches
+# produce output faster and more reliably; a local 7B model can stall or
+# truncate when asked for a large JSON array in one shot.
+batch_size = 10
+# Cap on the source text fed to the model per call (characters).
+source_char_limit = 4000
+# Maximum number of LLM calls to run concurrently. Local Ollama usually
+# serves one request at a time; raise this for cloud / multi-instance
+# backends.
+max_concurrency = 1
+# Per-LLM-call timeout in seconds. Must be >= the underlying client
+# timeout (see model_factory ollama timeout) so our wait_for doesn't
+# fire first and mask the real error. Local models can take minutes
+# per batch.
+llm_timeout = 600
+# Extra batch attempts beyond the minimum, to compensate for duplicates
+# / under-generation. The total attempts = ceil(num_samples / batch_size)
+# + extra_attempts.
+extra_attempts = 3
+# (QualityAgent) Max revise rounds per flagged sample before we accept
+# the latest revision (or drop the sample).
+max_revise_rounds = 2

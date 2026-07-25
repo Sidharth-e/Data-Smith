@@ -12,28 +12,41 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 
+from config import load_config
 from errors import GenerationError, map_llm_error
 from formats import AlpacaFormat, ChatFormat, ChatMessage, CompletionFormat
 from model_factory import ModelFactory
 
 logger = logging.getLogger("data_smith")
 
-# How many samples to ask the LLM for in a single call. Smaller batches
-# produce output faster and more reliably; a local 7B model can stall or
-# truncate when asked for a large JSON array in one shot.
-BATCH_SIZE = 10
+# Defaults used when the [generation] section is absent from config.toml.
+_DEFAULTS = {
+    "batch_size": 10,
+    "source_char_limit": 4000,
+    "max_concurrency": 1,
+    "llm_timeout": 600.0,
+    "extra_attempts": 3,
+    "max_revise_rounds": 2,
+}
 
-# Cap on the source text fed to the model per call (characters).
-SOURCE_CHAR_LIMIT = 4000
 
-# Maximum number of LLM calls to run concurrently. Local Ollama usually serves
-# one request at a time; raise this for cloud / multi-instance backends.
-MAX_CONCURRENCY = 1
+def _generation_settings(config: Optional[dict] = None) -> dict:
+    """Load generation tunables from the [generation] config section.
 
-# Per-LLM-call timeout in seconds. Must be >= the underlying client timeout
-# (see model_factory ollama timeout) so our wait_for doesn't fire first and
-# mask the real error. Local models can take minutes per batch.
-LLM_TIMEOUT = 600.0
+    Falls back to `_DEFAULTS` for any missing key. Coerces values to the
+    expected types (ints / float for timeout) so the rest of the code can
+    treat them as numbers.
+    """
+    cfg = (config or load_config()).get("generation", {})
+    out = dict(_DEFAULTS)
+    out.update({k: v for k, v in cfg.items() if v is not None})
+    out["batch_size"] = int(out["batch_size"])
+    out["source_char_limit"] = int(out["source_char_limit"])
+    out["max_concurrency"] = int(out["max_concurrency"])
+    out["llm_timeout"] = float(out["llm_timeout"])
+    out["extra_attempts"] = int(out["extra_attempts"])
+    out["max_revise_rounds"] = int(out["max_revise_rounds"])
+    return out
 
 
 def _extract_first_balanced_array(text: str) -> str | None:
@@ -80,16 +93,26 @@ class DatasetAgent:
     The LLM is supplied by `ModelFactory` based on `config.toml`.
     """
     
-    def __init__(self, llm: Optional[BaseChatModel] = None):
+    def __init__(self, llm: Optional[BaseChatModel] = None, config: Optional[dict] = None):
         """
         Initialize the agent with a chat model.
 
         Args:
             llm: Optional pre-built chat model. When None, one is created
                  from the project config via `ModelFactory`.
+            config: Optional pre-loaded config dict. When None, config.toml
+                 is loaded via `load_config`. The `[generation]` section
+                 supplies batch_size, source_char_limit, max_concurrency,
+                 llm_timeout, extra_attempts, max_revise_rounds.
         """
-        self.llm = llm or ModelFactory().create()
+        self.llm = llm or ModelFactory(config=config).create()
         self.parser = StrOutputParser()
+        s = _generation_settings(config)
+        self.batch_size = s["batch_size"]
+        self.source_char_limit = s["source_char_limit"]
+        self.max_concurrency = s["max_concurrency"]
+        self.llm_timeout = s["llm_timeout"]
+        self.extra_attempts = s["extra_attempts"]
     
     def _extract_json_array(self, text: str) -> List[dict]:
         """Extract a JSON array from LLM response text.
@@ -136,13 +159,13 @@ class DatasetAgent:
         chain = prompt | self.llm | self.parser
         try:
             return await asyncio.wait_for(
-                chain.ainvoke(prompt_vars), timeout=LLM_TIMEOUT
+                chain.ainvoke(prompt_vars), timeout=self.llm_timeout
             )
         except GenerationError:
             raise
         except asyncio.TimeoutError as exc:
             raise GenerationError(
-                f"LLM call timed out after {LLM_TIMEOUT}s"
+                f"LLM call timed out after {self.llm_timeout}s"
             ) from exc
         except Exception as exc:
             raise map_llm_error(exc) from exc
@@ -187,7 +210,7 @@ class DatasetAgent:
             else:
                 # No streaming support: do a regular invoke and emit once.
                 raw = await asyncio.wait_for(
-                    (prompt | self.llm).ainvoke(prompt_vars), timeout=LLM_TIMEOUT
+                    (prompt | self.llm).ainvoke(prompt_vars), timeout=self.llm_timeout
                 )
                 text = getattr(raw, "content", str(raw)) or ""
                 yield {"type": "token", "content": text}
@@ -196,7 +219,7 @@ class DatasetAgent:
             raise
         except asyncio.TimeoutError as exc:
             raise GenerationError(
-                f"LLM call timed out after {LLM_TIMEOUT}s"
+                f"LLM call timed out after {self.llm_timeout}s"
             ) from exc
         except Exception as exc:
             raise map_llm_error(exc) from exc
@@ -215,7 +238,7 @@ class DatasetAgent:
         prompt = self._prompt_alpaca()
         
         response = await self._run_chain(prompt, {
-            "text": text[:SOURCE_CHAR_LIMIT],  # Limit input size
+            "text": text[:self.source_char_limit],  # Limit input size
             "num_samples": num_samples
         })
 
@@ -272,7 +295,7 @@ Return ONLY the JSON array:""")
         prompt = self._prompt_chat()
         
         response = await self._run_chain(prompt, {
-            "text": text[:SOURCE_CHAR_LIMIT],
+            "text": text[:self.source_char_limit],
             "num_samples": num_samples
         })
 
@@ -338,7 +361,7 @@ Return ONLY the JSON array:""")
         prompt = self._prompt_completion()
         
         response = await self._run_chain(prompt, {
-            "text": text[:SOURCE_CHAR_LIMIT],
+            "text": text[:self.source_char_limit],
             "num_samples": num_samples
         })
 
@@ -401,18 +424,18 @@ Return ONLY the JSON array:""")
     def _window(self, text: str, index: int, total: int) -> str:
         """Return a slice of the source text for batch `index` of `total`.
 
-        For docs longer than SOURCE_CHAR_LIMIT this slides a window across the
+        For docs longer than `self.source_char_limit` this slides a window across the
         text so each batch sees a different region; for short docs it just
         returns the whole text. A deterministic pseudo-random offset per batch
         keeps batches from all starting at the same point.
         """
-        if len(text) <= SOURCE_CHAR_LIMIT:
+        if len(text) <= self.source_char_limit:
             return text
         # Deterministic but varied offset per batch.
         rng = random.Random(index * 17 + 7)
-        max_start = len(text) - SOURCE_CHAR_LIMIT
+        max_start = len(text) - self.source_char_limit
         start = rng.randint(0, max_start) if total > 1 else 0
-        return text[start:start + SOURCE_CHAR_LIMIT]
+        return text[start:start + self.source_char_limit]
 
     async def generate(
         self,
@@ -424,7 +447,7 @@ Return ONLY the JSON array:""")
         Generate a dataset in the specified format.
 
         For large `num_samples`, generation is split into batches of
-        `BATCH_SIZE` to keep LLM output manageable and high quality. Batches
+        `self.batch_size` to keep LLM output manageable and high quality. Batches
         iterate until the requested count is reached (or a retry cap is hit),
         accumulating results and removing duplicates.
 
@@ -445,20 +468,20 @@ Return ONLY the JSON array:""")
             raise ValueError(f"Unknown format type: {format_type}")
 
         # Small request: single call, original behaviour.
-        if num_samples <= BATCH_SIZE:
+        if num_samples <= self.batch_size:
             return await handler(text, num_samples)
 
         # Large request: batched accumulation with dedup.
-        # Batches run concurrently (bounded by MAX_CONCURRENCY) so a large
+        # Batches run concurrently (bounded by `self.max_concurrency`) so a large
         # request doesn't take num_batches * single_call_latency sequentially.
-        num_batches = (num_samples + BATCH_SIZE - 1) // BATCH_SIZE
+        num_batches = (num_samples + self.batch_size - 1) // self.batch_size
         # Extra attempts to compensate for duplicates / under-generation.
-        total_attempts = num_batches + 3
+        total_attempts = num_batches + self.extra_attempts
 
         async def run_batch(attempt: int) -> tuple[int, List[dict]]:
             window = self._window(text, attempt, total_attempts)
             try:
-                batch = await handler(window, BATCH_SIZE)
+                batch = await handler(window, self.batch_size)
             except GenerationError:
                 raise
             except Exception as exc:
@@ -466,7 +489,7 @@ Return ONLY the JSON array:""")
                 return attempt, []
             return attempt, batch
 
-        sem = asyncio.Semaphore(MAX_CONCURRENCY)
+        sem = asyncio.Semaphore(self.max_concurrency)
 
         async def guarded(attempt: int) -> tuple[int, List[dict]]:
             async with sem:
@@ -537,12 +560,12 @@ Return ONLY the JSON array:""")
         validate = self._validator_for(format_type)
 
         # Single batch for small requests, otherwise batched.
-        if num_samples <= BATCH_SIZE:
+        if num_samples <= self.batch_size:
             num_batches = 1
             extra = 0
         else:
-            num_batches = (num_samples + BATCH_SIZE - 1) // BATCH_SIZE
-            extra = 3  # extra attempts to cover dedup / under-generation
+            num_batches = (num_samples + self.batch_size - 1) // self.batch_size
+            extra = self.extra_attempts
         total_attempts = num_batches + extra
 
         yield {
@@ -550,7 +573,7 @@ Return ONLY the JSON array:""")
             "format_type": format_type,
             "num_samples": num_samples,
             "num_batches": total_attempts,
-            "batch_size": BATCH_SIZE,
+            "batch_size": self.batch_size,
         }
 
         results: List[dict] = []
@@ -562,7 +585,7 @@ Return ONLY the JSON array:""")
                 break
 
             window = self._window(text, attempt, total_attempts)
-            batch_size = min(BATCH_SIZE, num_samples - len(results))
+            batch_size = min(self.batch_size, num_samples - len(results))
             yield {
                 "type": "batch_start",
                 "index": attempt,
@@ -573,7 +596,7 @@ Return ONLY the JSON array:""")
             accumulated: List[str] = []
             try:
                 async for ev in self._run_chain_stream(prompt, {
-                    "text": window[:SOURCE_CHAR_LIMIT],
+                    "text": window[:self.source_char_limit],
                     "num_samples": batch_size,
                 }):
                     if ev["type"] == "thinking":
@@ -637,6 +660,434 @@ Return ONLY the JSON array:""")
                     "message": str(exc),
                     "index": attempt,
                 }
+                completed_batches += 1
+                yield {
+                    "type": "progress",
+                    "done": completed_batches,
+                    "total": total_attempts,
+                    "samples_so_far": len(results),
+                }
+                continue
+
+        trimmed = results[:num_samples]
+        yield {"type": "complete", "data": trimmed, "count": len(trimmed)}
+
+
+class QualityAgent(DatasetAgent):
+    """
+    Higher-accuracy generator: plan -> generate -> critique -> revise per batch.
+
+    A thin LangGraph-style supervisor built on top of `DatasetAgent` without
+    pulling in the `langgraph` dependency. For each batch it:
+
+      1. Generates candidate samples (reuses the parent's prompts/validators).
+      2. Asks a *critic* model (same LLM, critic prompt) to score each sample
+         against format-specific quality criteria and return a list of
+         verdicts: "ok" or "revise:<reason>".
+      3. For any sample marked "revise", asks the *reviser* (same LLM,
+         revise prompt) to rewrite the sample using the critic's feedback.
+      4. Re-validates and dedupes the result.
+
+    Trade-off: ~2-3x the LLM calls vs `DatasetAgent` for the same sample
+    count (generate + critique + revise), so it is slower and costlier.
+    Accuracy / quality of accepted samples should be noticeably higher.
+
+    The class intentionally shares the parent's prompts, validators,
+    `_extract_json_array`, `_window`, and `_dedupe_key` so behaviour stays
+    consistent and only the orchestration loop differs.
+    """
+
+    # How many revise rounds a single sample may go through before we give
+    # up and accept the latest revision (or drop the sample). Default; the
+    # effective value is read from `[generation].max_revise_rounds` in
+    # config.toml at construction time (see `__init__`).
+    MAX_REVISE_ROUNDS = 2
+
+    def __init__(
+        self,
+        llm: Optional[BaseChatModel] = None,
+        critic_llm: Optional[BaseChatModel] = None,
+        config: Optional[dict] = None,
+    ):
+        """
+        Args:
+            llm: Generator + reviser model. Defaults to `ModelFactory().create()`.
+            critic_llm: Optional separate model for the critic step. When None,
+                the same `llm` is reused (fine for local Ollama; use a stronger
+                cloud model here for best results).
+            config: Optional pre-loaded config dict. When None, config.toml is
+                loaded via `load_config`. Inherits `[generation]` settings from
+                `DatasetAgent` and additionally reads `max_revise_rounds`.
+        """
+        super().__init__(llm=llm, config=config)
+        self.critic_llm = critic_llm or self.llm
+        s = _generation_settings(config)
+        self.max_revise_rounds = s["max_revise_rounds"]
+
+    # ------------------------------------------------------------------
+    # Prompts
+    # ------------------------------------------------------------------
+    def _critic_prompt(self) -> ChatPromptTemplate:
+        return ChatPromptTemplate.from_messages([
+            ("system", """You are a strict quality reviewer for fine-tuning datasets.
+You are given a source text and a JSON array of candidate training samples.
+Score EACH sample against these criteria:
+- Faithfulness: claims must be supported by the source text.
+- Clarity: instruction/question is unambiguous.
+- Completeness: the output fully answers the instruction.
+- Format: matches the requested schema exactly.
+
+Return ONLY a JSON array (no prose) with one entry per input sample, in order.
+Each entry: {{"index": <0-based>, "verdict": "ok" | "revise", "reason": "<short reason or empty>"}}"""),
+            ("human", """Source text:
+{text}
+
+Candidate samples (JSON array):
+{samples}
+
+Return the JSON verdict array:"""),
+        ])
+
+    def _revise_prompt(self) -> ChatPromptTemplate:
+        return ChatPromptTemplate.from_messages([
+            ("system", """You are a dataset editor. Given one training sample and a
+critique, rewrite the sample to fix the problems. Keep the same schema.
+Return ONLY the single revised sample object as JSON, no array, no prose."""),
+            ("human", """Original sample:
+{sample}
+
+Critique:
+{critique}
+
+Source text (for reference):
+{text}
+
+Return the revised sample JSON:"""),
+        ])
+
+    # ------------------------------------------------------------------
+    # Critique + revise helpers
+    # ------------------------------------------------------------------
+    async def _critique(
+        self, source: str, samples: List[dict]
+    ) -> List[dict]:
+        """Return one verdict dict per sample: {"index","verdict","reason"}."""
+        if not samples:
+            return []
+        prompt = self._critic_prompt()
+        chain = prompt | self.critic_llm | self.parser
+        try:
+            raw = await asyncio.wait_for(
+                chain.ainvoke({
+                    "text": source[:self.source_char_limit],
+                    "samples": json.dumps(samples, ensure_ascii=False),
+                }),
+                timeout=self.llm_timeout,
+            )
+        except GenerationError:
+            raise
+        except Exception as exc:
+            raise map_llm_error(exc) from exc
+
+        verdicts = self._extract_json_array(raw)
+        # Normalise to a list of dicts with index/verdict/reason.
+        norm: List[dict] = []
+        for i, v in enumerate(verdicts):
+            if isinstance(v, dict):
+                norm.append({
+                    "index": v.get("index", i),
+                    "verdict": str(v.get("verdict", "ok")).lower(),
+                    "reason": str(v.get("reason", "")),
+                })
+            else:
+                norm.append({"index": i, "verdict": "ok", "reason": ""})
+        # Pad / trim to match sample count.
+        while len(norm) < len(samples):
+            norm.append({"index": len(norm), "verdict": "ok", "reason": ""})
+        return norm[: len(samples)]
+
+    async def _revise_one(
+        self, source: str, sample: dict, critique: str
+    ) -> dict:
+        """Return a revised single sample (raw dict)."""
+        prompt = self._revise_prompt()
+        chain = prompt | self.llm | self.parser
+        try:
+            raw = await asyncio.wait_for(
+                chain.ainvoke({
+                    "text": source[:self.source_char_limit],
+                    "sample": json.dumps(sample, ensure_ascii=False),
+                    "critique": critique,
+                }),
+                timeout=self.llm_timeout,
+            )
+        except GenerationError:
+            raise
+        except Exception as exc:
+            raise map_llm_error(exc) from exc
+
+        # The reviser should return a single object, not an array, but be
+        # lenient: accept a one-element array too.
+        parsed = self._extract_json_array(raw)
+        if isinstance(parsed, list) and parsed and isinstance(parsed[0], dict):
+            return parsed[0]
+        # Fallback: try to parse a bare object.
+        try:
+            obj = json.loads(raw.strip())
+            if isinstance(obj, dict):
+                return obj
+        except json.JSONDecodeError:
+            pass
+        # Last resort: return the original unchanged.
+        return sample
+
+    async def _generate_batch_with_qa(
+        self,
+        handler,
+        source: str,
+        batch_size: int,
+        validate,
+    ) -> List[dict]:
+        """Generate -> critique -> revise one batch, return validated samples."""
+        candidates = await handler(source, batch_size)
+
+        verdicts = await self._critique(source, candidates)
+        accepted: List[dict] = []
+        for v in verdicts:
+            idx = v.get("index", 0)
+            if idx < 0 or idx >= len(candidates):
+                continue
+            sample = candidates[idx]
+            if v.get("verdict") != "revise":
+                accepted.append(sample)
+                continue
+            reason = v.get("reason", "")
+            revised = sample
+            for _ in range(self.max_revise_rounds):
+                try:
+                    revised = await self._revise_one(source, sample, reason)
+                except GenerationError:
+                    break
+                # Re-validate the revision; if it still fails the schema,
+                # keep the last good version.
+                revalidated = validate([revised], 1)
+                if revalidated:
+                    revised = revalidated[0]
+                    # Re-critique the revision once; if still bad, accept it
+                    # rather than looping forever.
+                    rev_verdict = await self._critique(source, [revised])
+                    if not rev_verdict or rev_verdict[0].get("verdict") != "revise":
+                        break
+                    reason = rev_verdict[0].get("reason", reason)
+                else:
+                    break
+            accepted.append(revised)
+        return validate(accepted, batch_size)
+
+    # ------------------------------------------------------------------
+    # Public API mirrors DatasetAgent.generate / generate_stream
+    # ------------------------------------------------------------------
+    async def generate(
+        self,
+        text: str,
+        format_type: Literal["alpaca", "chat", "completion"],
+        num_samples: int = 5,
+    ) -> List[dict]:
+        """High-accuracy generate (non-streaming)."""
+        handler = {
+            "alpaca": self.generate_alpaca,
+            "chat": self.generate_chat,
+            "completion": self.generate_completion,
+        }.get(format_type)
+        if handler is None:
+            raise ValueError(f"Unknown format type: {format_type}")
+        validate = self._validator_for(format_type)
+
+        if num_samples <= self.batch_size:
+            return await self._generate_batch_with_qa(
+                handler, text[:self.source_char_limit], num_samples, validate
+            )
+
+        num_batches = (num_samples + self.batch_size - 1) // self.batch_size
+        total_attempts = num_batches + self.extra_attempts
+
+        async def run_batch(attempt: int) -> List[dict]:
+            window = self._window(text, attempt, total_attempts)
+            try:
+                return await self._generate_batch_with_qa(
+                    handler, window, self.batch_size, validate
+                )
+            except GenerationError:
+                raise
+            except Exception as exc:
+                logger.warning("QA batch %d failed: %s", attempt, exc)
+                return []
+
+        sem = asyncio.Semaphore(self.max_concurrency)
+
+        async def guarded(attempt: int) -> List[dict]:
+            async with sem:
+                return await run_batch(attempt)
+
+        batch_results = await asyncio.gather(
+            *(guarded(i) for i in range(total_attempts))
+        )
+
+        results: List[dict] = []
+        seen: set[str] = set()
+        for batch in batch_results:
+            for item in batch:
+                key = self._dedupe_key(item)
+                if not key or key in seen:
+                    continue
+                seen.add(key)
+                results.append(item)
+            if len(results) >= num_samples:
+                break
+        return results[:num_samples]
+
+    async def generate_stream(
+        self,
+        text: str,
+        format_type: Literal["alpaca", "chat", "completion"],
+        num_samples: int = 5,
+    ) -> AsyncIterator[Dict[str, Any]]:
+        """High-accuracy streaming generate.
+
+        Same event protocol as `DatasetAgent.generate_stream`, plus extra
+        per-batch events:
+          - {"type": "critique_start", "index"}
+          - {"type": "revise_start", "index", "count"}
+          - {"type": "revise_done", "index", "count"}
+        """
+        handler = {
+            "alpaca": self.generate_alpaca,
+            "chat": self.generate_chat,
+            "completion": self.generate_completion,
+        }.get(format_type)
+        if handler is None:
+            raise ValueError(f"Unknown format type: {format_type}")
+        validate = self._validator_for(format_type)
+
+        if num_samples <= self.batch_size:
+            num_batches = 1
+            extra = 0
+        else:
+            num_batches = (num_samples + self.batch_size - 1) // self.batch_size
+            extra = self.extra_attempts
+        total_attempts = num_batches + extra
+
+        yield {
+            "type": "start",
+            "format_type": format_type,
+            "num_samples": num_samples,
+            "num_batches": total_attempts,
+            "batch_size": self.batch_size,
+            "mode": "quality",
+        }
+
+        results: List[dict] = []
+        seen: set[str] = set()
+        completed_batches = 0
+
+        for attempt in range(total_attempts):
+            if len(results) >= num_samples:
+                break
+
+            window = self._window(text, attempt, total_attempts)
+            batch_size = min(self.batch_size, num_samples - len(results))
+            yield {
+                "type": "batch_start",
+                "index": attempt,
+                "total": total_attempts,
+                "batch_size": batch_size,
+            }
+
+            try:
+                # 1. Generate candidates.
+                candidates = await handler(window[:self.source_char_limit], batch_size)
+                yield {"type": "generate_done", "index": attempt, "count": len(candidates)}
+
+                # 2. Critique.
+                yield {"type": "critique_start", "index": attempt}
+                verdicts = await self._critique(window[:self.source_char_limit], candidates)
+
+                # 3. Revise flagged samples.
+                to_revise = [v for v in verdicts if v.get("verdict") == "revise"]
+                yield {"type": "revise_start", "index": attempt, "count": len(to_revise)}
+
+                accepted: List[dict] = []
+                revised_count = 0
+                for v in verdicts:
+                    idx = v.get("index", 0)
+                    if idx < 0 or idx >= len(candidates):
+                        continue
+                    sample = candidates[idx]
+                    if v.get("verdict") != "revise":
+                        accepted.append(sample)
+                        continue
+                    reason = v.get("reason", "")
+                    revised = sample
+                    for _ in range(self.max_revise_rounds):
+                        try:
+                            revised = await self._revise_one(
+                                window[:self.source_char_limit], sample, reason
+                            )
+                        except GenerationError:
+                            break
+                        revalidated = validate([revised], 1)
+                        if revalidated:
+                            revised = revalidated[0]
+                            rev_verdict = await self._critique(
+                                window[:self.source_char_limit], [revised]
+                            )
+                            if not rev_verdict or rev_verdict[0].get("verdict") != "revise":
+                                break
+                            reason = rev_verdict[0].get("reason", reason)
+                        else:
+                            break
+                    accepted.append(revised)
+                    revised_count += 1
+
+                yield {"type": "revise_done", "index": attempt, "count": revised_count}
+
+                # 4. Validate + dedupe.
+                batch_samples = validate(accepted, batch_size)
+                new_samples: List[dict] = []
+                for item in batch_samples:
+                    key = self._dedupe_key(item)
+                    if not key or key in seen:
+                        continue
+                    seen.add(key)
+                    new_samples.append(item)
+                results.extend(new_samples)
+                completed_batches += 1
+                yield {
+                    "type": "batch_done",
+                    "index": attempt,
+                    "samples": new_samples,
+                    "count": len(new_samples),
+                }
+                yield {
+                    "type": "progress",
+                    "done": completed_batches,
+                    "total": total_attempts,
+                    "samples_so_far": len(results),
+                }
+            except GenerationError as exc:
+                yield {"type": "warning", "message": str(exc.user_message), "index": attempt}
+                logger.warning("QA batch %d failed in stream: %s", attempt, exc)
+                completed_batches += 1
+                yield {
+                    "type": "progress",
+                    "done": completed_batches,
+                    "total": total_attempts,
+                    "samples_so_far": len(results),
+                }
+                continue
+            except Exception as exc:
+                logger.warning("QA batch %d failed: %s", attempt, exc)
+                yield {"type": "warning", "message": str(exc), "index": attempt}
                 completed_batches += 1
                 yield {
                     "type": "progress",

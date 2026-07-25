@@ -8,13 +8,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
-from typing import Literal
+from typing import Literal, Optional
 import json
 import logging
 import traceback
 import uvicorn
 
-from agent import DatasetAgent
+from agent import DatasetAgent, QualityAgent
 from errors import GenerationError
 from formats import GenerateResponse
 from model_factory import ModelFactory
@@ -84,8 +84,27 @@ async def validation_error_handler(request: Request, exc: RequestValidationError
         content={"success": False, "detail": "Validation failed", "errors": exc.errors()},
     )
 
-# Initialize the dataset agent using the model configured in config.toml
-agent = DatasetAgent(llm=ModelFactory().create())
+# Initialize the dataset agent using the model configured in config.toml.
+# `settings` is loaded once at import time (see config.py); pass it through
+# so agents and ModelFactory share the same in-memory config.
+agent = DatasetAgent(llm=ModelFactory(config=settings).create(), config=settings)
+# Higher-accuracy variant (generate -> critique -> revise). Built lazily on
+# first request that asks for quality mode, since it reuses the same model
+# but makes ~2-3x the LLM calls.
+quality_agent: Optional[QualityAgent] = None
+
+
+def _get_agent(quality: bool) -> DatasetAgent:
+    """Return the fast agent, or the quality agent (built on first use)."""
+    global quality_agent
+    if not quality:
+        return agent
+    if quality_agent is None:
+        quality_agent = QualityAgent(
+            llm=ModelFactory(config=settings).create(),
+            config=settings,
+        )
+    return quality_agent
 
 
 @app.get("/")
@@ -116,7 +135,8 @@ async def health_check():
 async def generate_dataset(
     file: UploadFile = File(...),
     format_type: Literal["alpaca", "chat", "completion"] = Form(...),
-    num_samples: int = Form(default=5)
+    num_samples: int = Form(default=5),
+    quality: bool = Form(default=False),
 ):
     """
     Generate a dataset from an uploaded text file.
@@ -166,7 +186,7 @@ async def generate_dataset(
         )
         
         # Generate dataset
-        data = await agent.generate(
+        data = await _get_agent(quality).generate(
             text=text,
             format_type=format_type,
             num_samples=num_samples
@@ -194,7 +214,8 @@ async def generate_dataset(
 async def generate_from_text(
     text: str = Form(...),
     format_type: Literal["alpaca", "chat", "completion"] = Form(...),
-    num_samples: int = Form(default=5)
+    num_samples: int = Form(default=5),
+    quality: bool = Form(default=False),
 ):
     """
     Generate a dataset from raw text input (no file upload).
@@ -224,7 +245,7 @@ async def generate_from_text(
             "Generating dataset from text: format=%s samples=%d chars=%d",
             format_type, num_samples, len(text)
         )
-        data = await agent.generate(
+        data = await _get_agent(quality).generate(
             text=text,
             format_type=format_type,
             num_samples=num_samples
@@ -258,6 +279,7 @@ async def generate_dataset_stream(
     file: UploadFile = File(...),
     format_type: Literal["alpaca", "chat", "completion"] = Form(...),
     num_samples: int = Form(default=5),
+    quality: bool = Form(default=False),
 ):
     """
     Stream a dataset generation from an uploaded text file.
@@ -279,10 +301,10 @@ async def generate_dataset_stream(
         raise HTTPException(status_code=400, detail="File is empty")
 
     logger.info(
-        "Streaming dataset: file=%s format=%s samples=%d chars=%d",
-        file.filename, format_type, num_samples, len(text)
+        "Streaming dataset: file=%s format=%s samples=%d chars=%d quality=%s",
+        file.filename, format_type, num_samples, len(text), quality
     )
-    return _build_sse_response(text, format_type, num_samples)
+    return _build_sse_response(text, format_type, num_samples, quality)
 
 
 @app.post("/api/generate-text-stream")
@@ -290,6 +312,7 @@ async def generate_from_text_stream(
     text: str = Form(...),
     format_type: Literal["alpaca", "chat", "completion"] = Form(...),
     num_samples: int = Form(default=5),
+    quality: bool = Form(default=False),
 ):
     """
     Stream a dataset generation from raw text input (no file upload).
@@ -302,17 +325,17 @@ async def generate_from_text_stream(
         raise HTTPException(status_code=400, detail="num_samples must be between 1 and 1000")
 
     logger.info(
-        "Streaming dataset from text: format=%s samples=%d chars=%d",
-        format_type, num_samples, len(text)
+        "Streaming dataset from text: format=%s samples=%d chars=%d quality=%s",
+        format_type, num_samples, len(text), quality
     )
-    return _build_sse_response(text, format_type, num_samples)
+    return _build_sse_response(text, format_type, num_samples, quality)
 
 
-def _build_sse_response(text: str, format_type: str, num_samples: int):
+def _build_sse_response(text: str, format_type: str, num_samples: int, quality: bool = False):
     """Wrap the agent's `generate_stream` generator into an SSE StreamingResponse."""
     async def event_source():
         try:
-            async for ev in agent.generate_stream(text, format_type, num_samples):
+            async for ev in _get_agent(quality).generate_stream(text, format_type, num_samples):
                 yield _sse(ev)
         except GenerationError as exc:
             yield _sse({"type": "error", "message": exc.user_message})
