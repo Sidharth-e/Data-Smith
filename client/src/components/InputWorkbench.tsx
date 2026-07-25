@@ -13,11 +13,12 @@ const formatExamples: Record<FormatType, string> = {
 };
 
 interface InputWorkbenchProps {
+  onGenerateStart: () => void;
   onGenerateSuccess: (data: GenerateResponse) => void;
   onGenerateError: (errorMsg: string) => void;
 }
 
-export default function InputWorkbench({ onGenerateSuccess, onGenerateError }: InputWorkbenchProps) {
+export default function InputWorkbench({ onGenerateStart, onGenerateSuccess, onGenerateError }: InputWorkbenchProps) {
   const {
     inputMode,
     setInputMode,
@@ -67,6 +68,7 @@ export default function InputWorkbench({ onGenerateSuccess, onGenerateError }: I
   };
 
   const handleGenerate = async () => {
+    onGenerateStart();
     try {
       const res = await generateMutation.mutateAsync({
         file,

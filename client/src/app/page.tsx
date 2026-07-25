@@ -22,6 +22,10 @@ export default function Home() {
     }
   }, [isDarkMode]);
 
+  const handleGenerateStart = () => {
+    setIsGenerating(true);
+  };
+
   const handleGenerateSuccess = (res: GenerateResponse) => {
     setResult(res);
     setIsGenerating(false);
@@ -98,6 +102,7 @@ export default function Home() {
 
         <div className="grid lg:grid-cols-2 gap-8 items-start">
           <InputWorkbench
+            onGenerateStart={handleGenerateStart}
             onGenerateSuccess={handleGenerateSuccess}
             onGenerateError={handleGenerateError}
           />
