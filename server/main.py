@@ -2,14 +2,25 @@
 FastAPI server for Data Smith - Dataset Generation Tool.
 """
 
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import Response
 from typing import Literal
+import logging
+import traceback
 import uvicorn
 
 from agent import DatasetAgent
 from formats import GenerateResponse
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
+logger = logging.getLogger("data_smith")
 
 
 # Initialize FastAPI app
@@ -20,13 +31,43 @@ app = FastAPI(
 )
 
 # Configure CORS for frontend access
+# Allow all localhost ports so dev servers (3000, 3001, 5173, etc.) work
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=[
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:3001",
+        "http://127.0.0.1:3001",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def catch_errors_middleware(request: Request, call_next):
+    """Log unhandled exceptions and return a structured JSON error response."""
+    try:
+        response = await call_next(request)
+        return response
+    except Exception as exc:
+        logger.error(
+            "Unhandled error on %s %s: %s\n%s",
+            request.method,
+            request.url.path,
+            str(exc),
+            traceback.format_exc(),
+        )
+        return JSONResponse(
+            status_code=500,
+            content={
+                "success": False,
+                "detail": "Internal server error",
+                "error": str(exc),
+            },
+        )
 
 # Initialize the dataset agent
 # You can change the model name here to match your Ollama installation
@@ -70,7 +111,7 @@ async def generate_dataset(
         Generated dataset in the specified format
     """
     # Validate file type
-    if not file.filename.endswith('.txt'):
+    if not file.filename or not file.filename.endswith('.txt'):
         raise HTTPException(
             status_code=400,
             detail="Only .txt files are supported"
@@ -86,13 +127,24 @@ async def generate_dataset(
     try:
         # Read file content
         content = await file.read()
-        text = content.decode('utf-8')
+        try:
+            text = content.decode('utf-8')
+        except UnicodeDecodeError:
+            raise HTTPException(
+                status_code=400,
+                detail="File must be UTF-8 encoded text"
+            )
         
         if not text.strip():
             raise HTTPException(
                 status_code=400,
                 detail="File is empty"
             )
+        
+        logger.info(
+            "Generating dataset: file=%s format=%s samples=%d chars=%d",
+            file.filename, format_type, num_samples, len(text)
+        )
         
         # Generate dataset
         data = await agent.generate(
@@ -101,6 +153,8 @@ async def generate_dataset(
             num_samples=num_samples
         )
         
+        logger.info("Generated %d samples in %s format", len(data), format_type)
+        
         return GenerateResponse(
             success=True,
             format_type=format_type,
@@ -108,12 +162,10 @@ async def generate_dataset(
             message=f"Generated {len(data)} samples in {format_type} format"
         )
         
-    except UnicodeDecodeError:
-        raise HTTPException(
-            status_code=400,
-            detail="File must be UTF-8 encoded text"
-        )
+    except HTTPException:
+        raise
     except Exception as e:
+        logger.error("Dataset generation failed: %s\n%s", str(e), traceback.format_exc())
         return GenerateResponse(
             success=False,
             format_type=format_type,
@@ -152,11 +204,17 @@ async def generate_from_text(
         )
     
     try:
+        logger.info(
+            "Generating dataset from text: format=%s samples=%d chars=%d",
+            format_type, num_samples, len(text)
+        )
         data = await agent.generate(
             text=text,
             format_type=format_type,
             num_samples=num_samples
         )
+        
+        logger.info("Generated %d samples in %s format", len(data), format_type)
         
         return GenerateResponse(
             success=True,
@@ -166,6 +224,7 @@ async def generate_from_text(
         )
         
     except Exception as e:
+        logger.error("Dataset generation failed: %s\n%s", str(e), traceback.format_exc())
         return GenerateResponse(
             success=False,
             format_type=format_type,
