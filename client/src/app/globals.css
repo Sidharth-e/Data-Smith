@@ -202,6 +202,10 @@ body {
 }
 
 /* Custom Scrollbar */
+.custom-scrollbar {
+  scrollbar-gutter: stable;
+}
+
 .custom-scrollbar::-webkit-scrollbar {
   width: 14px;
   height: 14px;
