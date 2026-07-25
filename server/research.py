@@ -366,6 +366,7 @@ Write the markdown source document:"""),
           - {"type": "start", "topic"}
           - {"type": "agent_start", "agent": "planner"|"researcher"|"gap"|
              "quality"|"writer", "detail"?}
+          - {"type": "agent_done", "agent"}  (emitted when a node finishes)
           - {"type": "agent_message", "agent", "message"}
           - {"type": "plan", "questions": [...]}
           - {"type": "search", "query", "results": [...]}
@@ -396,6 +397,7 @@ Write the markdown source document:"""),
                 "agent": "planner",
                 "message": f"Planned {len(plan)} research questions",
             }
+            yield {"type": "agent_done", "agent": "planner"}
 
             # 2. Researcher (plan pass)
             yield {"type": "agent_start", "agent": "researcher"}
@@ -419,6 +421,7 @@ Write the markdown source document:"""),
                 "agent": "researcher",
                 "message": f"Collected {len(snippets)} snippets from {len(done)} queries",
             }
+            yield {"type": "agent_done", "agent": "researcher"}
 
             # 3. Gap (one follow-up pass by default)
             yield {"type": "agent_start", "agent": "gap"}
@@ -445,6 +448,7 @@ Write the markdown source document:"""),
                     "agent": "gap",
                     "message": "No gaps found — coverage looks good",
                 }
+            yield {"type": "agent_done", "agent": "gap"}
 
             # 4. Quality
             yield {"type": "agent_start", "agent": "quality"}
@@ -456,11 +460,40 @@ Write the markdown source document:"""),
                 "agent": "quality",
                 "message": f"Kept {len(kept)} high-signal snippets",
             }
+            yield {"type": "agent_done", "agent": "quality"}
 
             # 5. Writer (stream tokens if the model supports it)
             yield {"type": "agent_start", "agent": "writer"}
-            document = await self._writer_stream(state)
+            chunk_queue: "asyncio.Queue[str]" = asyncio.Queue()
+
+            async def _on_chunk(content: str) -> None:
+                await chunk_queue.put(content)
+
+            writer_task = asyncio.create_task(
+                self._writer_stream(state, on_chunk=_on_chunk)
+            )
+            # Drain chunks as they arrive so the UI shows the document
+            # being written in real time, instead of freezing until the
+            # writer finishes.
+            while True:
+                if writer_task.done() and chunk_queue.empty():
+                    break
+                try:
+                    chunk = await asyncio.wait_for(
+                        chunk_queue.get(), timeout=0.1
+                    )
+                    yield {"type": "document_chunk", "content": chunk}
+                except asyncio.TimeoutError:
+                    continue
+            document = await writer_task
+            # Drain any stragglers.
+            while not chunk_queue.empty():
+                yield {
+                    "type": "document_chunk",
+                    "content": chunk_queue.get_nowait(),
+                }
             yield {"type": "document_done", "document": document}
+            yield {"type": "agent_done", "agent": "writer"}
             yield {"type": "complete", "document": document}
 
         except GenerationError as exc:
@@ -469,8 +502,17 @@ Write the markdown source document:"""),
             logger.error("Research pipeline failed: %s", exc, exc_info=True)
             yield {"type": "error", "message": f"Research failed: {exc}"}
 
-    async def _writer_stream(self, state: ResearchState) -> str:
-        """Invoke the writer prompt, streaming chunks if the model supports it."""
+    async def _writer_stream(
+        self,
+        state: ResearchState,
+        on_chunk=None,
+    ) -> str:
+        """Invoke the writer prompt, streaming chunks if the model supports it.
+
+        If `on_chunk` is provided, it is awaited with each text delta so the
+        caller can emit `document_chunk` SSE events and the UI doesn't appear
+        frozen while the writer is producing the (long) final document.
+        """
         prompt = self._writer_prompt()
         prompt_vars = {
             "topic": state["topic"],
@@ -486,11 +528,15 @@ Write the markdown source document:"""),
                         content = str(chunk) if chunk else ""
                     if content:
                         buffer.append(content)
+                        if on_chunk is not None:
+                            await on_chunk(content)
                 return "".join(buffer).strip()
             raw = await asyncio.wait_for(
                 chain.ainvoke(prompt_vars), timeout=self.llm_timeout
             )
             text = getattr(raw, "content", str(raw)) or ""
+            if text and on_chunk is not None:
+                await on_chunk(text)
             return text.strip()
         except GenerationError:
             raise

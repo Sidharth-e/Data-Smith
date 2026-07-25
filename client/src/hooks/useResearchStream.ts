@@ -110,6 +110,15 @@ export function useResearchStream() {
                         : a
                     ),
                   };
+                case "agent_done":
+                  return {
+                    ...s,
+                    agents: s.agents.map((a) =>
+                      a.name === event.agent
+                        ? { ...a, status: "done" }
+                        : a
+                    ),
+                  };
                 case "agent_message":
                   return {
                     ...s,
@@ -157,10 +166,6 @@ export function useResearchStream() {
                     ...s,
                     status: "done",
                     document: event.document,
-                    agents: s.agents.map((a) => ({
-                      ...a,
-                      status: a.status === "running" ? "done" : a.status,
-                    })),
                   };
                 case "error":
                   return {
@@ -180,6 +185,9 @@ export function useResearchStream() {
                 break;
               case "agent_start":
                 pushLog(`▶ ${event.agent} agent started`);
+                break;
+              case "agent_done":
+                pushLog(`✓ ${event.agent} agent done`);
                 break;
               case "agent_message":
                 pushLog(`${event.agent}: ${event.message}`);

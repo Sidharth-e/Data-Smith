@@ -36,6 +36,7 @@ export async function generateDataset(
 export type ResearchEvent =
   | { type: "start"; topic: string }
   | { type: "agent_start"; agent: ResearchAgentName; detail?: string }
+  | { type: "agent_done"; agent: ResearchAgentName }
   | { type: "agent_message"; agent: ResearchAgentName; message: string }
   | { type: "plan"; questions: string[] }
   | { type: "search"; query: string; results: ResearchSnippet[] }
