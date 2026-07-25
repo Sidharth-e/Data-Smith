@@ -11,6 +11,8 @@ from typing import Any, AsyncIterator, Dict, List, Literal, Optional
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
+from langgraph.graph import END, StateGraph
+from typing_extensions import TypedDict
 
 from config import load_config
 from errors import GenerationError, map_llm_error
@@ -673,20 +675,46 @@ Return ONLY the JSON array:""")
         yield {"type": "complete", "data": trimmed, "count": len(trimmed)}
 
 
+class QAState(TypedDict, total=False):
+    """State carried across the per-batch QA subgraph.
+
+    One instance per batch; the outer `generate` / `generate_stream` methods
+    run the graph (or walk the node methods manually, for the streaming path)
+    once per batch and then dedupe across batches themselves.
+    """
+    source: str                 # source text slice for this batch
+    batch_size: int             # requested samples for this batch
+    validate: Any                # format validator fn (format-specific)
+    handler: Any                # format generate handler (format-specific)
+    candidates: List[dict]      # initial generated candidates (step 1)
+    current: List[dict]         # samples being critiqued this round
+    verdicts: List[dict]        # critic verdicts (step 2): {"index","verdict","reason"}
+    accepted: List[dict]         # samples accepted as-is or after revision
+    pending: List[dict]         # [{"sample","reason"}] still needing revision this round
+    round: int                  # current revise round (0-based)
+    samples: List[dict]         # final validated output (finalize node)
+
+
 class QualityAgent(DatasetAgent):
     """
     Higher-accuracy generator: plan -> generate -> critique -> revise per batch.
 
-    A thin LangGraph-style supervisor built on top of `DatasetAgent` without
-    pulling in the `langgraph` dependency. For each batch it:
+    The per-batch quality loop is implemented as a LangGraph `StateGraph`
+    (see `build_qa_graph`). Nodes:
 
-      1. Generates candidate samples (reuses the parent's prompts/validators).
-      2. Asks a *critic* model (same LLM, critic prompt) to score each sample
-         against format-specific quality criteria and return a list of
-         verdicts: "ok" or "revise:<reason>".
-      3. For any sample marked "revise", asks the *reviser* (same LLM,
-         revise prompt) to rewrite the sample using the critic's feedback.
-      4. Re-validates and dedupes the result.
+      1. ``generate``  -- produce candidate samples (reuses the parent's
+         prompts/validators via a handler).
+      2. ``critique``  -- ask a *critic* model (same LLM, critic prompt) to
+         score each sample against format-specific quality criteria and
+         return a list of verdicts: "ok" or "revise:<reason>".
+      3. ``revise``    -- for any sample marked "revise", ask the *reviser*
+         (same LLM, revise prompt) to rewrite the sample using the critic's
+         feedback, then loop back to ``critique`` while rounds remain.
+      4. ``finalize``  -- re-validate and return the accepted samples.
+
+    The graph is driven once per batch; the outer `generate` /
+    `generate_stream` methods handle batching, windowing, concurrency and
+    cross-batch dedup (same as `DatasetAgent`).
 
     Trade-off: ~2-3x the LLM calls vs `DatasetAgent` for the same sample
     count (generate + critique + revise), so it is slower and costlier.
@@ -723,6 +751,7 @@ class QualityAgent(DatasetAgent):
         self.critic_llm = critic_llm or self.llm
         s = _generation_settings(config)
         self.max_revise_rounds = s["max_revise_rounds"]
+        self._qa_graph = self.build_qa_graph()
 
     # ------------------------------------------------------------------
     # Prompts
@@ -841,6 +870,105 @@ Return the revised sample JSON:"""),
         # Last resort: return the original unchanged.
         return sample
 
+    # ------------------------------------------------------------------
+    # QA subgraph nodes
+    # ------------------------------------------------------------------
+    # The per-batch generate -> critique -> revise loop is modelled as a
+    # LangGraph StateGraph (see `build_qa_graph`). One round of the graph
+    # loop = one batch-level revise pass over all samples flagged by the
+    # critic. The non-streaming `generate` drives the compiled graph via
+    # `ainvoke`; `generate_stream` walks the same node methods manually so
+    # it can emit per-step SSE events in a stable order (same pattern as
+    # `ResearchAgent.run_stream`).
+    async def _qa_generate_node(self, state: QAState) -> dict:
+        """Step 1: produce candidate samples via the format handler."""
+        handler = state["handler"]
+        candidates = await handler(state["source"], state["batch_size"])
+        return {
+            "candidates": candidates,
+            "current": candidates,
+            "accepted": [],
+            "round": 0,
+            "pending": [],
+        }
+
+    async def _qa_critique_node(self, state: QAState) -> dict:
+        """Step 2: critique the current samples, partition into accepted/pending."""
+        current = state.get("current", [])
+        if not current:
+            return {"pending": [], "verdicts": []}
+        verdicts = await self._critique(state["source"], current)
+        accepted = list(state.get("accepted", []))
+        pending: List[dict] = []
+        for i, v in enumerate(verdicts):
+            if i >= len(current):
+                continue
+            if v.get("verdict") != "revise":
+                accepted.append(current[i])
+            else:
+                pending.append({"sample": current[i], "reason": v.get("reason", "")})
+        return {"verdicts": verdicts, "accepted": accepted, "pending": pending}
+
+    async def _qa_revise_node(self, state: QAState) -> dict:
+        """Step 3: revise each pending sample once, producing the next `current`."""
+        pending = state.get("pending", [])
+        source = state["source"]
+        validate = state["validate"]
+        new_current: List[dict] = []
+        for item in pending:
+            sample = item["sample"]
+            reason = item["reason"]
+            try:
+                revised = await self._revise_one(source, sample, reason)
+            except GenerationError:
+                new_current.append(sample)
+                continue
+            revalidated = validate([revised], 1)
+            new_current.append(revalidated[0] if revalidated else sample)
+        return {
+            "current": new_current,
+            "round": state.get("round", 0) + 1,
+            "pending": [],
+        }
+
+    async def _qa_finalize_node(self, state: QAState) -> dict:
+        """Step 4: accept any still-current samples (rounds exhausted) and validate."""
+        accepted = list(state.get("accepted", []))
+        accepted.extend(state.get("current", []))
+        samples = state["validate"](accepted, state["batch_size"])
+        return {"samples": samples}
+
+    def _qa_route_after_critique(self, state: QAState) -> str:
+        """Conditional edge: revise while pending samples remain and rounds left."""
+        if not state.get("pending"):
+            return "finalize"
+        if state.get("round", 0) >= self.max_revise_rounds:
+            return "finalize"
+        return "revise"
+
+    def build_qa_graph(self) -> Any:
+        """Return a compiled LangGraph StateGraph for the per-batch QA loop.
+
+        Exposed so callers can compose the QA pipeline into a larger graph.
+        `generate` drives this via `ainvoke`; `generate_stream` walks the
+        node methods directly for stable event ordering.
+        """
+        g = StateGraph(QAState)
+        g.add_node("generate", self._qa_generate_node)
+        g.add_node("critique", self._qa_critique_node)
+        g.add_node("revise", self._qa_revise_node)
+        g.add_node("finalize", self._qa_finalize_node)
+        g.set_entry_point("generate")
+        g.add_edge("generate", "critique")
+        g.add_conditional_edges(
+            "critique",
+            self._qa_route_after_critique,
+            {"revise": "revise", "finalize": "finalize"},
+        )
+        g.add_edge("revise", "critique")
+        g.add_edge("finalize", END)
+        return g.compile()
+
     async def _generate_batch_with_qa(
         self,
         handler,
@@ -848,41 +976,15 @@ Return the revised sample JSON:"""),
         batch_size: int,
         validate,
     ) -> List[dict]:
-        """Generate -> critique -> revise one batch, return validated samples."""
-        candidates = await handler(source, batch_size)
-
-        verdicts = await self._critique(source, candidates)
-        accepted: List[dict] = []
-        for v in verdicts:
-            idx = v.get("index", 0)
-            if idx < 0 or idx >= len(candidates):
-                continue
-            sample = candidates[idx]
-            if v.get("verdict") != "revise":
-                accepted.append(sample)
-                continue
-            reason = v.get("reason", "")
-            revised = sample
-            for _ in range(self.max_revise_rounds):
-                try:
-                    revised = await self._revise_one(source, sample, reason)
-                except GenerationError:
-                    break
-                # Re-validate the revision; if it still fails the schema,
-                # keep the last good version.
-                revalidated = validate([revised], 1)
-                if revalidated:
-                    revised = revalidated[0]
-                    # Re-critique the revision once; if still bad, accept it
-                    # rather than looping forever.
-                    rev_verdict = await self._critique(source, [revised])
-                    if not rev_verdict or rev_verdict[0].get("verdict") != "revise":
-                        break
-                    reason = rev_verdict[0].get("reason", reason)
-                else:
-                    break
-            accepted.append(revised)
-        return validate(accepted, batch_size)
+        """Run the QA subgraph for one batch, return validated samples."""
+        init: QAState = {
+            "source": source[:self.source_char_limit],
+            "batch_size": batch_size,
+            "validate": validate,
+            "handler": handler,
+        }
+        result = await self._qa_graph.ainvoke(init)
+        return list(result.get("samples", []))
 
     # ------------------------------------------------------------------
     # Public API mirrors DatasetAgent.generate / generate_stream
@@ -1004,55 +1106,52 @@ Return the revised sample JSON:"""),
             }
 
             try:
+                # Drive the QA subgraph nodes manually so SSE events emit
+                # in stable order. Mirrors ResearchAgent.run_stream which
+                # walks nodes by hand rather than relying on graph astream.
+                source = window[:self.source_char_limit]
+                state: QAState = {
+                    "source": source,
+                    "batch_size": batch_size,
+                    "validate": validate,
+                    "handler": handler,
+                }
+
                 # 1. Generate candidates.
-                candidates = await handler(window[:self.source_char_limit], batch_size)
-                yield {"type": "generate_done", "index": attempt, "count": len(candidates)}
+                state.update(await self._qa_generate_node(state))
+                yield {
+                    "type": "generate_done",
+                    "index": attempt,
+                    "count": len(state.get("current", [])),
+                }
 
-                # 2. Critique.
-                yield {"type": "critique_start", "index": attempt}
-                verdicts = await self._critique(window[:self.source_char_limit], candidates)
+                # 2-3. Critique -> (revise -> critique)* until clean / round cap.
+                while True:
+                    yield {"type": "critique_start", "index": attempt}
+                    state.update(await self._qa_critique_node(state))
+                    pending = state.get("pending", [])
+                    if not pending:
+                        break
+                    if state.get("round", 0) >= self.max_revise_rounds:
+                        # Rounds exhausted; pending samples are accepted as-is
+                        # by finalize. No revision happens this round.
+                        yield {
+                            "type": "revise_done",
+                            "index": attempt,
+                            "count": len(pending),
+                        }
+                        break
+                    yield {"type": "revise_start", "index": attempt, "count": len(pending)}
+                    state.update(await self._qa_revise_node(state))
+                    yield {
+                        "type": "revise_done",
+                        "index": attempt,
+                        "count": len(pending),
+                    }
 
-                # 3. Revise flagged samples.
-                to_revise = [v for v in verdicts if v.get("verdict") == "revise"]
-                yield {"type": "revise_start", "index": attempt, "count": len(to_revise)}
-
-                accepted: List[dict] = []
-                revised_count = 0
-                for v in verdicts:
-                    idx = v.get("index", 0)
-                    if idx < 0 or idx >= len(candidates):
-                        continue
-                    sample = candidates[idx]
-                    if v.get("verdict") != "revise":
-                        accepted.append(sample)
-                        continue
-                    reason = v.get("reason", "")
-                    revised = sample
-                    for _ in range(self.max_revise_rounds):
-                        try:
-                            revised = await self._revise_one(
-                                window[:self.source_char_limit], sample, reason
-                            )
-                        except GenerationError:
-                            break
-                        revalidated = validate([revised], 1)
-                        if revalidated:
-                            revised = revalidated[0]
-                            rev_verdict = await self._critique(
-                                window[:self.source_char_limit], [revised]
-                            )
-                            if not rev_verdict or rev_verdict[0].get("verdict") != "revise":
-                                break
-                            reason = rev_verdict[0].get("reason", reason)
-                        else:
-                            break
-                    accepted.append(revised)
-                    revised_count += 1
-
-                yield {"type": "revise_done", "index": attempt, "count": revised_count}
-
-                # 4. Validate + dedupe.
-                batch_samples = validate(accepted, batch_size)
+                # 4. Finalize: accept remaining current + validate + dedupe.
+                state.update(await self._qa_finalize_node(state))
+                batch_samples = state.get("samples", [])
                 new_samples: List[dict] = []
                 for item in batch_samples:
                     key = self._dedupe_key(item)

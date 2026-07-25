@@ -5,7 +5,7 @@ import { useWorkbenchStore } from "@/store/useWorkbenchStore";
 import { GenerateResponse } from "@/app/api";
 import { useGenerateDatasetStream } from "@/hooks/useGenerateDatasetStream";
 import StreamPanel from "@/components/StreamPanel";
-import { Code2, Table, LayoutGrid, Search, Copy, Download, Check, Sparkles, Database, Zap, Sliders } from "lucide-react";
+import { Code2, Table, LayoutGrid, Search, Copy, Check, Sparkles, Database, Zap, Sliders } from "lucide-react";
 
 interface OutputStudioProps {
   result: GenerateResponse | null;
@@ -168,7 +168,9 @@ export default function OutputStudio({ result, loading, stream, onClearLogs }: O
                 onClick={handleDownload}
                 className="h-small px-m rounded-lg bg-primary hover:bg-primary-hover text-white text-xs font-extrabold flex items-center gap-1.5 transition-all shadow-2xs"
               >
-                <Download className="w-3.5 h-3.5" />
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                </svg>
                 <span>Export JSON</span>
               </button>
             </div>
@@ -217,15 +219,71 @@ export default function OutputStudio({ result, loading, stream, onClearLogs }: O
           )}
 
           {activeStudioTab === "split" && (
-            <div className="flex-1 min-h-0 flex flex-col gap-3 overflow-hidden">
-              <div className="h-1/2 min-h-0 flex flex-col overflow-hidden">
+            <div className="flex-1 min-h-0 flex flex-col md:flex-row gap-3 overflow-hidden">
+              <div className="flex-1 min-w-0 h-1/2 md:h-full flex flex-col overflow-hidden">
                 <StreamPanel state={stream.state} onClearLogs={onClearLogs} />
               </div>
-              <div className="h-1/2 min-h-0 overflow-y-auto rounded-xl border border-border bg-card p-m">
+              <div className="flex-1 min-w-0 h-1/2 md:h-full overflow-y-auto rounded-xl border border-border bg-card p-m">
                 {result?.success && result.data.length > 0 ? (
-                  <pre className="text-foreground text-xs font-mono font-semibold whitespace-pre-wrap break-words">
-                    {JSON.stringify(filteredData, null, 2)}
-                  </pre>
+                  <>
+                    {viewMode === "json" && (
+                      <pre className="text-foreground text-xs font-mono font-semibold whitespace-pre-wrap break-words">
+                        {JSON.stringify(filteredData, null, 2)}
+                      </pre>
+                    )}
+
+                    {viewMode === "table" && (
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-left text-xs text-foreground">
+                          <thead className="border-b border-border bg-muted text-secondary uppercase tracking-wider font-extrabold">
+                            <tr>
+                              <th className="p-s">#</th>
+                              {Object.keys(filteredData[0] || {}).map((key) => (
+                                <th key={key} className="p-s">
+                                  {key}
+                                </th>
+                              ))}
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-border">
+                            {filteredData.map((row, idx) => (
+                              <tr key={idx} className="hover:bg-muted/50">
+                                <td className="p-s text-secondary font-bold font-mono">{idx + 1}</td>
+                                {Object.keys(filteredData[0] || {}).map((key) => (
+                                  <td key={key} className="p-s max-w-xs truncate font-mono text-[11px] font-semibold">
+                                    {typeof row[key] === "object"
+                                      ? JSON.stringify(row[key])
+                                      : String(row[key])}
+                                  </td>
+                                ))}
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+
+                    {viewMode === "cards" && (
+                      <div className="grid gap-3">
+                        {filteredData.map((item, idx) => (
+                          <div
+                            key={idx}
+                            className="bg-card border border-border rounded-xl p-m space-y-2 shadow-2xs"
+                          >
+                            <div className="flex items-center justify-between text-xs font-extrabold text-secondary border-b border-border pb-1">
+                              <span>Sample #{idx + 1}</span>
+                              <span className="uppercase text-[10px] font-mono text-primary font-bold">
+                                {result.format_type}
+                              </span>
+                            </div>
+                            <pre className="text-foreground text-xs font-mono font-semibold whitespace-pre-wrap break-words">
+                              {JSON.stringify(item, null, 2)}
+                            </pre>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </>
                 ) : (
                   <div className="text-secondary text-xs font-bold text-center py-l">
                     No samples generated yet.
