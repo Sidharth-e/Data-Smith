@@ -87,8 +87,8 @@ export default function InputWorkbench({ onGenerateStart, stream }: InputWorkben
     (inputMode === "text" && textInput.trim().length > 0);
 
   return (
-    <div className="bg-card border border-border rounded-2xl p-6 shadow-xs flex flex-col justify-between lg:h-[640px] w-full overflow-hidden">
-      <div className="space-y-4">
+    <div className="bg-card border border-border rounded-2xl shadow-xs flex flex-col justify-between lg:h-[calc(100vh-128px)] w-full overflow-hidden">
+      <div className="space-y-4 overflow-y-auto flex-1 p-6 pb-2 custom-scrollbar">
         <div className="space-y-3">
           <div className="flex items-center justify-between">
             <label className="text-xs font-extrabold uppercase tracking-wider text-secondary flex items-center gap-1.5">
@@ -210,13 +210,13 @@ export default function InputWorkbench({ onGenerateStart, stream }: InputWorkben
             </button>
           </div>
 
-          <div className="flex flex-wrap gap-2.5">
+          <div className="grid grid-cols-2 lg:grid-cols-3 gap-2.5">
             {(["alpaca", "chatml", "sharegpt", "dpo", "completion"] as FormatType[]).map((format) => (
               <button
                 key={format}
                 type="button"
                 onClick={() => setFormatType(format)}
-                className={`h-10 px-3 flex-1 rounded-xl text-xs font-extrabold transition-all border cursor-pointer ${formatType === format
+                className={`h-10 px-3 rounded-xl text-xs font-extrabold transition-all border cursor-pointer ${formatType === format
                   ? "bg-primary text-white border-primary shadow-2xs"
                   : "bg-card border-border text-secondary hover:border-primary/50 hover:text-foreground"
                   }`}
@@ -302,8 +302,9 @@ export default function InputWorkbench({ onGenerateStart, stream }: InputWorkben
         )}
       </div>
 
-      <div className="flex gap-2 pt-2 border-t border-border">
-        <button
+      <div className="px-6 pb-6">
+        <div className="flex gap-2 pt-4 border-t border-border">
+          <button
           type="button"
           onClick={handleGenerate}
           disabled={stream.isPending || !isFormValid}
@@ -331,6 +332,7 @@ export default function InputWorkbench({ onGenerateStart, stream }: InputWorkben
             <span>Stop</span>
           </button>
         )}
+        </div>
       </div>
     </div>
   );

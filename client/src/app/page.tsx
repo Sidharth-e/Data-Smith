@@ -88,15 +88,6 @@ export default function Home() {
         </div>
       </main>
 
-      <footer className="border-t border-border bg-card py-4 mt-8">
-        <div className="max-w-[1600px] w-full mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-secondary font-bold">
-          <div className="flex items-center gap-2">
-            <Terminal className="w-4 h-4 text-primary" />
-            <span className="text-foreground">Data Smith Workbench v1.0</span>
-          </div>
-          <p>Powered by LangChain Agents</p>
-        </div>
-      </footer>
 
       <CommandPalette />
 

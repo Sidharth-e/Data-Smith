@@ -61,7 +61,7 @@ export default function OutputStudio({ result, loading, stream, onClearLogs }: O
   }, [result?.data]);
 
   return (
-    <div className="bg-card border border-border rounded-2xl p-6 shadow-xs flex flex-col lg:h-[640px] w-full overflow-hidden">
+    <div className="bg-card border border-border rounded-2xl p-6 shadow-xs flex flex-col lg:h-[calc(100vh-128px)] w-full overflow-hidden">
       <div className="flex-1 flex flex-col min-h-0 gap-4">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border pb-4 shrink-0">
           <div className="flex items-center gap-3">
