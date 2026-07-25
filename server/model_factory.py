@@ -49,6 +49,11 @@ class ModelFactory:
             model=ollama_cfg.get("model", "llama3.2"),
             temperature=temperature,
             base_url=ollama_cfg.get("base_url", "http://localhost:11434"),
+            # A local model can take minutes to emit a full JSON array of
+            # samples; raise the underlying httpx client timeout so the SDK
+            # doesn't kill the request at its ~120s default.
+            sync_client_kwargs={"timeout": float(ollama_cfg.get("timeout", 600))},
+            async_client_kwargs={"timeout": float(ollama_cfg.get("timeout", 600))},
         )
 
     def _build_ollama_cloud(self, llm_cfg: dict[str, Any], temperature: float) -> BaseChatModel:
@@ -69,13 +74,19 @@ class ModelFactory:
                 "var or [llm.ollama_cloud].api_key in config.toml."
             )
 
+        # Auth headers + a generous timeout, passed to the underlying httpx
+        # clients. `client_kwargs` is deprecated in favor of the split
+        # sync/async variants, which both accept `headers` and `timeout`.
+        client_kwargs = {
+            "headers": {"Authorization": f"Bearer {api_key}"},
+            "timeout": float(cloud_cfg.get("timeout", 600)),
+        }
         return ChatOllama(
             model=cloud_cfg.get("model", "mistral:7b-instruct"),
             temperature=temperature,
             base_url=base_url,
-            # langchain_ollama forwards extra kwargs to the underlying client;
-            # the Ollama SDK picks up auth headers via the `headers` kwarg.
-            client_kwargs={"headers": {"Authorization": f"Bearer {api_key}"}},
+            sync_client_kwargs=client_kwargs,
+            async_client_kwargs=client_kwargs,
         )
 
     def _build_gemini(self, llm_cfg: dict[str, Any], temperature: float) -> BaseChatModel:
@@ -92,6 +103,7 @@ class ModelFactory:
             model=gemini_cfg.get("model", "gemini-1.5-flash"),
             temperature=temperature,
             google_api_key=api_key,
+            timeout=float(gemini_cfg.get("timeout", 600)),
         )
 
 

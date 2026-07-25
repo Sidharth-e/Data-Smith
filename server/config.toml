@@ -22,7 +22,7 @@ origins = [
 
 [llm]
 # Which provider to use: "ollama" (local), "ollama_cloud", or "gemini"
-provider = "ollama"
+provider = "ollama_cloud"
 # Sampling temperature applied to every provider
 temperature = 0.7
 # Max chars of source text fed into the prompt per request
@@ -32,6 +32,9 @@ max_input_chars = 4000
 [llm.ollama]
 model = "${OLLAMA_MODEL:-mistral:7b-instruct}"
 base_url = "${OLLAMA_BASE_URL:-http://localhost:11434}"
+# Per-request timeout (seconds) for the underlying httpx client. Local
+# models can take minutes to emit a full batch of JSON samples.
+timeout = "${OLLAMA_TIMEOUT:-600}"
 
 # ----- Ollama Cloud -----
 # Ollama's hosted endpoint. base_url should be the host root
@@ -40,6 +43,7 @@ base_url = "${OLLAMA_BASE_URL:-http://localhost:11434}"
 model = "${OLLAMA_CLOUD_MODEL:-mistral:7b-instruct}"
 base_url = "${OLLAMA_CLOUD_BASE_URL:-https://ollama.com}"
 api_key = "${OLLAMA_CLOUD_API_KEY}"
+timeout = "${OLLAMA_CLOUD_TIMEOUT:-600}"
 
 # ----- Google Gemini -----
 [llm.gemini]
@@ -47,3 +51,4 @@ model = "${GEMINI_MODEL:-gemini-1.5-flash}"
 # API key is read from the GEMINI_API_KEY env var (see .env.example).
 # Do NOT hardcode secrets here.
 api_key = "${GEMINI_API_KEY}"
+timeout = "${GEMINI_TIMEOUT:-600}"

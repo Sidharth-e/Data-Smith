@@ -2,6 +2,7 @@
 LangChain Agent for Dataset Generation using Ollama.
 """
 
+import asyncio
 import json
 import logging
 import random
@@ -17,12 +18,22 @@ from model_factory import ModelFactory
 
 logger = logging.getLogger("data_smith")
 
-# How many samples to ask the LLM for in a single call. Larger values tend to
-# truncate or produce lower-quality output; this is a sane ceiling per batch.
-BATCH_SIZE = 20
+# How many samples to ask the LLM for in a single call. Smaller batches
+# produce output faster and more reliably; a local 7B model can stall or
+# truncate when asked for a large JSON array in one shot.
+BATCH_SIZE = 10
 
 # Cap on the source text fed to the model per call (characters).
 SOURCE_CHAR_LIMIT = 4000
+
+# Maximum number of LLM calls to run concurrently. Local Ollama usually serves
+# one request at a time; raise this for cloud / multi-instance backends.
+MAX_CONCURRENCY = 1
+
+# Per-LLM-call timeout in seconds. Must be >= the underlying client timeout
+# (see model_factory ollama timeout) so our wait_for doesn't fire first and
+# mask the real error. Local models can take minutes per batch.
+LLM_TIMEOUT = 600.0
 
 
 def _extract_first_balanced_array(text: str) -> str | None:
@@ -124,9 +135,15 @@ class DatasetAgent:
         """Run a prompt|llm|parser chain, mapping LLM errors to GenerationError."""
         chain = prompt | self.llm | self.parser
         try:
-            return await chain.ainvoke(prompt_vars)
+            return await asyncio.wait_for(
+                chain.ainvoke(prompt_vars), timeout=LLM_TIMEOUT
+            )
         except GenerationError:
             raise
+        except asyncio.TimeoutError as exc:
+            raise GenerationError(
+                f"LLM call timed out after {LLM_TIMEOUT}s"
+            ) from exc
         except Exception as exc:
             raise map_llm_error(exc) from exc
 
@@ -369,40 +386,44 @@ Return ONLY the JSON array:""")
             return await handler(text, num_samples)
 
         # Large request: batched accumulation with dedup.
-        results: List[dict] = []
-        seen: set[str] = set()
-
-        # Estimate number of batches; allow extra attempts to compensate for
-        # duplicates / under-generation.
+        # Batches run concurrently (bounded by MAX_CONCURRENCY) so a large
+        # request doesn't take num_batches * single_call_latency sequentially.
         num_batches = (num_samples + BATCH_SIZE - 1) // BATCH_SIZE
-        max_attempts = num_batches + 3  # retry slack
-        attempt = 0
+        # Extra attempts to compensate for duplicates / under-generation.
+        total_attempts = num_batches + 3
 
-        while len(results) < num_samples and attempt < max_attempts:
-            remaining = num_samples - len(results)
-            batch_n = min(BATCH_SIZE, remaining)
-
-            # Pick a region of the source text for this batch.
-            window = self._window(text, attempt, max_attempts)
-
+        async def run_batch(attempt: int) -> tuple[int, List[dict]]:
+            window = self._window(text, attempt, total_attempts)
             try:
-                batch = await handler(window, batch_n)
+                batch = await handler(window, BATCH_SIZE)
             except GenerationError:
                 raise
             except Exception as exc:
-                # A single bad batch shouldn't kill the whole run.
                 logger.warning("Batch %d failed: %s", attempt, exc)
-                attempt += 1
-                continue
+                return attempt, []
+            return attempt, batch
 
+        sem = asyncio.Semaphore(MAX_CONCURRENCY)
+
+        async def guarded(attempt: int) -> tuple[int, List[dict]]:
+            async with sem:
+                return await run_batch(attempt)
+
+        batch_results = await asyncio.gather(
+            *(guarded(i) for i in range(total_attempts))
+        )
+
+        results: List[dict] = []
+        seen: set[str] = set()
+        for _, batch in batch_results:
             for item in batch:
                 key = self._dedupe_key(item)
                 if not key or key in seen:
                     continue
                 seen.add(key)
                 results.append(item)
-
-            attempt += 1
+            if len(results) >= num_samples:
+                break
 
         # Trim to exactly the requested count.
         return results[:num_samples]
