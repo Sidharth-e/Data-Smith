@@ -279,13 +279,9 @@ class DatasetAgent:
             ("system", """You are a dataset generator for fine-tuning language models.
 Your task is to create instruction-following training data in Alpaca format.
 
-The source text may be anything: a resume, an article, documentation, a report,
-a product description, a biography, etc. Use ALL of the information present in
-the source, regardless of its type. Do not silently drop or invent information;
-the samples must be faithful to the source.
-
-Diversify the samples across the full breadth of the source so each sample
-covers a distinct fact or topic rather than paraphrasing the same point.
+CRITICAL INSTRUCTIONS:
+1. NO HALLUCINATIONS: Use ONLY the information explicitly present in the source text. Do not invent, assume, or hallucinate any details. The samples must be 100% faithful to the source.
+2. NO DUPLICATES: Diversify the samples across the full breadth of the source. Each sample MUST cover a distinct, unique fact or topic. Do NOT generate multiple questions about the same point and do NOT rephrase the same question.
 
 IMPORTANT: Return ONLY a valid JSON array, no other text."""),
             ("human", """Based on the following source text, generate {num_samples} training examples in Alpaca format.
@@ -347,13 +343,9 @@ Return ONLY the JSON array:""")
             ("system", """You are a dataset generator for fine-tuning language models.
 Your task is to create conversational training data in ChatML format.
 
-The source text may be anything: a resume, an article, documentation, a report,
-a product description, a biography, etc. Use ALL of the information present in
-the source, regardless of its type. Do not silently drop or invent information;
-the samples must be faithful to the source.
-
-Diversify the samples across the full breadth of the source so each sample
-covers a distinct fact or topic rather than paraphrasing the same point.
+CRITICAL INSTRUCTIONS:
+1. NO HALLUCINATIONS: Use ONLY the information explicitly present in the source text. Do not invent, assume, or hallucinate any details. The samples must be 100% faithful to the source.
+2. NO DUPLICATES: Diversify the samples across the full breadth of the source. Each sample MUST cover a distinct, unique fact or topic. Do NOT generate multiple questions about the same point and do NOT rephrase the same question.
 
 IMPORTANT: Return ONLY a valid JSON array, no other text."""),
             ("human", """Based on the following source text, generate {num_samples} conversations in ChatML format.
@@ -417,13 +409,9 @@ Return ONLY the JSON array:""")
             ("system", """You are a dataset generator for fine-tuning language models.
 Your task is to create conversational training data in ShareGPT format.
 
-The source text may be anything: a resume, an article, documentation, a report,
-a product description, a biography, etc. Use ALL of the information present in
-the source, regardless of its type. Do not silently drop or invent information;
-the samples must be faithful to the source.
-
-Diversify the samples across the full breadth of the source so each sample
-covers a distinct fact or topic rather than paraphrasing the same point.
+CRITICAL INSTRUCTIONS:
+1. NO HALLUCINATIONS: Use ONLY the information explicitly present in the source text. Do not invent, assume, or hallucinate any details. The samples must be 100% faithful to the source.
+2. NO DUPLICATES: Diversify the samples across the full breadth of the source. Each sample MUST cover a distinct, unique fact or topic. Do NOT generate multiple questions about the same point and do NOT rephrase the same question.
 
 IMPORTANT: Return ONLY a valid JSON array, no other text."""),
             ("human", """Based on the following source text, generate {num_samples} conversations in ShareGPT format.
@@ -629,37 +617,29 @@ Return ONLY the JSON array:""")
             return str(item["text"]).strip().lower()
         return ""
 
-    @staticmethod
-    def _dedupe_key(item: dict) -> str:
-        """Return a canonical key used to detect duplicate samples.
-
-        Comparison keys on the *question/prompt* portion only (see
-        `_question_text`), not the entire sample. This means 10 samples with
-        the same question but different system roles / answer phrasings now
-        collapse to a single entry instead of all surviving dedup.
-
-        A small `dedup_mode` knob (config `[generation].dedup_mode`) selects
-        between:
-          - "exact":         full question string (default-ish, tightest)
-          - "question_hash": normalized token bag (whitespace/punct-insensitive)
-          - "embedding":     same as "question_hash" for now; an embedding
-                             backend can be plugged in later without changing
-                             the call sites.
+    def _is_duplicate(self, item: dict, seen_items: list[dict]) -> bool:
+        """Check if an item is a duplicate of any already seen item.
+        Uses fuzzy string matching on the question text for better deduplication.
         """
-        q = DatasetAgent._question_text(item)
-        if not q:
-            # Fall back to the whole-object hash so empty/unknown shapes
-            # still dedupe against themselves.
-            return json.dumps(item, sort_keys=True).lower()
-        mode = getattr(DatasetAgent, "_dedup_mode_runtime", "question_hash")
+        new_q = self._question_text(item)
+        if not new_q:
+            return False
+            
+        mode = getattr(self, "_dedup_mode_runtime", "question_hash")
         if mode == "exact":
-            return q
-        # Normalized token bag: lowercase, strip punctuation, sort tokens.
-        # This treats "What is Sidharth's focus?" and "what is sidharth's focus?"
-        # as the same question, while still distinguishing different questions.
-        tokens = re.sub(r"[^a-z0-9\s]", " ", q).split()
-        tokens.sort()
-        return " ".join(tokens)
+            for seen in seen_items:
+                if self._question_text(seen) == new_q:
+                    return True
+            return False
+            
+        import difflib
+        for seen in seen_items:
+            seen_q = self._question_text(seen)
+            if not seen_q:
+                continue
+            if difflib.SequenceMatcher(None, new_q, seen_q).ratio() > 0.75:
+                return True
+        return False
 
     def _window(self, text: str, index: int, total: int) -> str:
         """Return a slice of the source text for batch `index` of `total`.
@@ -742,13 +722,10 @@ Return ONLY the JSON array:""")
         )
 
         results: List[dict] = []
-        seen: set[str] = set()
         for _, batch in batch_results:
             for item in batch:
-                key = self._dedupe_key(item)
-                if not key or key in seen:
+                if self._is_duplicate(item, results):
                     continue
-                seen.add(key)
                 results.append(item)
             if len(results) >= num_samples:
                 break
@@ -823,7 +800,6 @@ Return ONLY the JSON array:""")
         }
 
         results: List[dict] = []
-        seen: set[str] = set()
         completed_batches = 0
 
         for attempt in range(total_attempts):
@@ -865,10 +841,8 @@ Return ONLY the JSON array:""")
                         # Dedupe against the running set.
                         new_samples: List[dict] = []
                         for item in batch_samples:
-                            key = self._dedupe_key(item)
-                            if not key or key in seen:
+                            if self._is_duplicate(item, results + new_samples):
                                 continue
-                            seen.add(key)
                             new_samples.append(item)
                         results.extend(new_samples)
                         completed_batches += 1
@@ -1465,7 +1439,6 @@ Return the single sample JSON:"""),
         # Phase 5 + 6 + 7: generate anchored samples, then critique/revise.
         validate_fn = validate
         results: List[dict] = []
-        seen_keys: set[str] = set()
         accepted_questions: List[str] = []
         per_fact_count: Dict[str, int] = {}
         total = len(manifest)
@@ -1506,7 +1479,6 @@ Return the single sample JSON:"""),
 
             # Phase 8 (a): per-fact cap + question dedup BEFORE critique so
             # we never exceed max_paraphrases_per_fact for a single fact.
-            key = self._dedupe_key(sample)
             if kind == "positive":
                 if per_fact_count.get(fact_id, 0) >= self.max_paraphrases_per_fact:
                     await emit({
@@ -1516,7 +1488,7 @@ Return the single sample JSON:"""),
                         "samples_so_far": len(results),
                     })
                     continue
-            if not key or key in seen_keys:
+            if self._is_duplicate(sample, results):
                 await emit({
                     "type": "progress",
                     "done": i + 1,
@@ -1577,8 +1549,7 @@ Return the single sample JSON:"""),
 
             final = validated[0]
             # Re-check dedup after potential revision changes the question.
-            final_key = self._dedupe_key(final)
-            if not final_key or final_key in seen_keys:
+            if self._is_duplicate(final, results):
                 await emit({
                     "type": "progress",
                     "done": i + 1,
@@ -1586,7 +1557,6 @@ Return the single sample JSON:"""),
                     "samples_so_far": len(results),
                 })
                 continue
-            seen_keys.add(final_key)
             if kind == "positive":
                 per_fact_count[fact_id] = per_fact_count.get(fact_id, 0) + 1
             results.append(final)
@@ -1802,13 +1772,10 @@ Return the revised sample JSON:"""),
         )
 
         results: List[dict] = []
-        seen: set[str] = set()
         for batch in batch_results:
             for item in batch:
-                key = self._dedupe_key(item)
-                if not key or key in seen:
+                if self._is_duplicate(item, results):
                     continue
-                seen.add(key)
                 results.append(item)
             if len(results) >= num_samples:
                 break
@@ -1899,7 +1866,6 @@ Return the revised sample JSON:"""),
         }
 
         results: List[dict] = []
-        seen: set[str] = set()
         completed_batches = 0
 
         for attempt in range(total_attempts):
@@ -1964,10 +1930,8 @@ Return the revised sample JSON:"""),
                 batch_samples = state.get("samples", [])
                 new_samples: List[dict] = []
                 for item in batch_samples:
-                    key = self._dedupe_key(item)
-                    if not key or key in seen:
+                    if self._is_duplicate(item, results + new_samples):
                         continue
-                    seen.add(key)
                     new_samples.append(item)
                 results.extend(new_samples)
                 completed_batches += 1
